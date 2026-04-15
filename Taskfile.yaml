@@ -116,9 +116,19 @@ tasks:
         echo "Waiting for Flux OCIRepository 'milo' to reconcile..."
         task test-infra:kubectl -- -n flux-system wait ocirepository/milo \
           --for=condition=Ready --timeout=180s
-        echo "Waiting for Flux Kustomization 'milo' to reconcile (up to 5m)..."
-        task test-infra:kubectl -- -n flux-system wait kustomization/milo \
-          --for=condition=Ready --timeout=300s
+        echo "Waiting for Flux Kustomization 'milo' to reconcile (up to 10m)..."
+        # On a cold kind cluster the milo overlay has to apply CRDs,
+        # bring up etcd via Helm, and wait for the apiserver + controller
+        # manager to roll out. 10m gives us headroom; the Kustomization's
+        # own timeout is 5m but this wait polls until Ready=True.
+        if ! task test-infra:kubectl -- -n flux-system wait kustomization/milo \
+            --for=condition=Ready --timeout=600s; then
+          echo "Kustomization milo did not become Ready. Dumping status:" >&2
+          task test-infra:kubectl -- -n flux-system get kustomization milo -o yaml >&2 || true
+          task test-infra:kubectl -- -n milo-system get pods,deploy,helmreleases -o wide >&2 || true
+          task test-infra:kubectl -- -n milo-system describe helmrelease --all >&2 || true
+          exit 1
+        fi
       - task: test-infra:install-observability
 
   test:deploy:

@@ -26,10 +26,11 @@ jobs:
       # The root Taskfile remote-includes datum-cloud/test-infra; required
       # for `task test:setup` / `task test:teardown` to resolve includes.
       TASK_X_REMOTE_TASKFILES: '1'
-      # Auto-accept trust prompts for the remote Taskfile include; CI has
-      # no TTY to answer interactively. Equivalent to invoking every task
-      # with --yes.
-      FORCE_COLOR: '1'
+      # Point every bare `kubectl` (e.g. in the diagnostics step) at the
+      # kind cluster that test-infra:cluster-up writes out. `task test-infra:*`
+      # handles this internally, but the diagnostics bash block runs kubectl
+      # directly.
+      KUBECONFIG: ${{ github.workspace }}/.test-infra/kubeconfig
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,19 +61,13 @@ jobs:
         run: |
           mkdir -p diagnostics
           {
+            echo "=== kubeconfig sanity ==="
+            echo "KUBECONFIG=${KUBECONFIG:-<unset>}"
+            test -f "${KUBECONFIG:-}" && echo "kubeconfig exists" || echo "kubeconfig MISSING"
+            kubectl cluster-info || true
+            echo
             echo "=== cluster events (sorted) ==="
             kubectl get events -A --sort-by=.lastTimestamp || true
-            echo
-            echo "=== resource-metrics deployment ==="
-            kubectl -n resource-metrics-system describe deployment/resource-metrics-controller-manager || true
-            echo
-            echo "=== resource-metrics pods ==="
-            kubectl -n resource-metrics-system describe pod -l app=resource-metrics || true
-            kubectl -n resource-metrics-system get pods -o wide || true
-            echo
-            echo "=== resource-metrics logs ==="
-            kubectl -n resource-metrics-system logs -l app=resource-metrics --tail=500 --all-containers=true || true
-            kubectl -n resource-metrics-system logs -l control-plane=controller-manager --tail=500 --all-containers=true || true
             echo
             echo "=== flux OCIRepository (milo) ==="
             kubectl -n flux-system get ocirepository milo -o yaml || true
@@ -80,8 +75,28 @@ jobs:
             echo "=== flux Kustomization (milo) ==="
             kubectl -n flux-system get kustomization milo -o yaml || true
             echo
-            echo "=== all flux resources ==="
-            kubectl -n flux-system get kustomizations,ocirepositories,helmreleases -o wide || true
+            echo "=== all flux resources (flux-system, milo-system) ==="
+            kubectl get kustomizations,ocirepositories,helmreleases,helmcharts,helmrepositories -A -o wide || true
+            echo
+            echo "=== milo-system pods + deploys + helmreleases ==="
+            kubectl -n milo-system get pods,deploy,statefulset,helmreleases -o wide || true
+            kubectl -n milo-system describe helmreleases --all 2>/dev/null || true
+            echo
+            echo "=== flux controllers logs (last 200 lines each) ==="
+            for d in source-controller kustomize-controller helm-controller; do
+              echo "--- $d ---"
+              kubectl -n flux-system logs deployment/$d --tail=200 || true
+            done
+            echo
+            echo "=== resource-metrics deployment ==="
+            kubectl -n resource-metrics-system describe deployment/resource-metrics-controller-manager || true
+            echo
+            echo "=== resource-metrics pods ==="
+            kubectl -n resource-metrics-system get pods -o wide || true
+            kubectl -n resource-metrics-system describe pod -l control-plane=controller-manager || true
+            echo
+            echo "=== resource-metrics logs ==="
+            kubectl -n resource-metrics-system logs -l control-plane=controller-manager --tail=500 --all-containers=true || true
           } > diagnostics/cluster-state.log 2>&1
 
       - name: Upload diagnostics
