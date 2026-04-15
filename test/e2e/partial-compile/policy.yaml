@@ -1,0 +1,34 @@
+# Policy with two generators: one valid, one with an unparseable CEL
+# label expression. The controller must run the valid one and surface
+# the broken one in status (Degraded=True, InvalidCEL=True).
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-partial-compile
+spec:
+  generators:
+    - name: configmap-info-ok
+      resource:
+        group: ""
+        version: v1
+        resource: configmaps
+      families:
+        - name: configmap_info_ok
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+
+    - name: configmap-info-broken
+      resource:
+        group: ""
+        version: v1
+        resource: configmaps
+      families:
+        - name: configmap_info_broken
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.nope[[[syntax-error"

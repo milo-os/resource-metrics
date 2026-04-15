@@ -1,0 +1,163 @@
+version: '3'
+
+dotenv: ['.env']
+
+vars:
+  TOOL_DIR: "{{.USER_WORKING_DIR}}/bin"
+  TEST_INFRA_REPO_REF: 'v0.6.4'
+  TEST_INFRA_CLUSTER_NAME: 'test-infra'
+  IMG_NAME: 'ghcr.io/datum-cloud/resource-metrics'
+  IMG_TAG: 'dev'
+  IMG: '{{.IMG_NAME}}:{{.IMG_TAG}}'
+  # Milo publishes oci://ghcr.io/datum-cloud/milo-kustomize from the
+  # build-apiserver workflow. Two tag schemes exist:
+  #   * Semver releases (e.g. v0.24.3) — used in production/staging infra.
+  #   * Per-merge branch tags v0.0.0-<branch> (and v0.0.0-main-<timestamp>).
+  # We pin to the most recent semver tag confirmed via
+  # `infra/apps/datum-control-plane-system/.../production/milo-oci-repository-patch.yaml`,
+  # which contains `overlays/test-infra` as of milo commit 4c62124d.
+  # Bump this deliberately alongside test-infra and other sibling repos.
+  MILO_REPO_REF: 'v0.24.3'
+  CHAINSAW_VERSION: 'v0.2.12'
+
+includes:
+  # Remote taskfile from datum-cloud/test-infra. Requires
+  # TASK_X_REMOTE_TASKFILES=1 in the environment. The pin lives in
+  # TEST_INFRA_REPO_REF and is bumped deliberately alongside sibling
+  # provider repos.
+  test-infra:
+    taskfile: https://raw.githubusercontent.com/datum-cloud/test-infra/{{.TEST_INFRA_REPO_REF}}/Taskfile.yml
+    flatten: false
+    vars:
+      REPO_REF: '{{.TEST_INFRA_REPO_REF}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  install-tools:
+    desc: Install required development tools into ./bin (chainsaw)
+    silent: true
+    cmds:
+      - |
+        set -e
+        mkdir -p {{.TOOL_DIR}}
+
+        if [ ! -f "{{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}" ]; then
+          echo "Installing chainsaw {{.CHAINSAW_VERSION}}..."
+          GOBIN={{.TOOL_DIR}} go install github.com/kyverno/chainsaw@{{.CHAINSAW_VERSION}}
+          mv {{.TOOL_DIR}}/chainsaw {{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}
+        fi
+        ln -sf {{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}} {{.TOOL_DIR}}/chainsaw
+    status:
+      - test -f {{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}
+      - test -L {{.TOOL_DIR}}/chainsaw
+
+  test:
+    desc: Run Go tests
+    cmds:
+      - go test -timeout 5m ./... -count=1
+    silent: false
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+    silent: false
+
+  dev:build:
+    desc: Build the resource-metrics container image for development
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo "Building resource-metrics container image: {{.IMG}}"
+
+        GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+        VERSION="v0.0.0-dev+${GIT_COMMIT:0:7}"
+        GIT_TREE_STATE="clean"
+        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+          GIT_TREE_STATE="dirty"
+        fi
+        BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "unknown")
+
+        docker build \
+          --build-arg VERSION="${VERSION}" \
+          --build-arg GIT_COMMIT="${GIT_COMMIT}" \
+          --build-arg GIT_TREE_STATE="${GIT_TREE_STATE}" \
+          --build-arg BUILD_DATE="${BUILD_DATE}" \
+          -f "{{.USER_WORKING_DIR}}/Dockerfile" \
+          -t "{{.IMG}}" \
+          "{{.USER_WORKING_DIR}}"
+        echo "Successfully built {{.IMG}}"
+
+  dev:load:
+    desc: Load the resource-metrics image into the kind cluster
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo "Loading image {{.IMG}} into kind cluster '{{.TEST_INFRA_CLUSTER_NAME}}'..."
+        kind load docker-image "{{.IMG}}" --name "{{.TEST_INFRA_CLUSTER_NAME}}"
+
+  test:install-dependencies:
+    desc: Install milo via Flux OCIRepository + observability stack.
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo "Applying milo dependency kustomization..."
+        task test-infra:kubectl -- apply -k config/dependencies/milo
+      - |
+        set -e
+        echo "Waiting for Flux OCIRepository 'milo' to reconcile..."
+        task test-infra:kubectl -- -n flux-system wait ocirepository/milo \
+          --for=condition=Ready --timeout=180s
+        echo "Waiting for Flux Kustomization 'milo' to reconcile (up to 5m)..."
+        task test-infra:kubectl -- -n flux-system wait kustomization/milo \
+          --for=condition=Ready --timeout=300s
+      - task: test-infra:install-observability
+
+  test:deploy:
+    desc: Deploy resource-metrics via the test-infra overlay.
+    silent: true
+    cmds:
+      - task test-infra:kubectl -- apply -k config/overlays/test-infra
+      - task test-infra:kubectl -- -n resource-metrics-system rollout status deployment/resource-metrics-controller-manager --timeout=180s
+
+  test:setup:
+    desc: Bring up kind, install dependencies, build/load images, deploy test overlay.
+    silent: true
+    cmds:
+      - task: test-infra:cluster-up
+      - task: test:install-dependencies
+      - task: dev:build
+      - task: dev:load
+      - task: test:deploy
+
+  e2e:
+    desc: Run chainsaw e2e tests against test/e2e.
+    silent: true
+    deps: [install-tools]
+    cmds:
+      # KUBECONFIG is pinned to the isolated test-infra kubeconfig so the
+      # chainsaw setup steps that derive a per-project kubeconfig via `sed`
+      # on the server URL cannot corrupt a developer's ~/.kube/config. CI
+      # has no pre-existing kubeconfig so this is a no-op there.
+      - |
+        set -e
+        export KUBECONFIG="{{.USER_WORKING_DIR}}/.test-infra/kubeconfig"
+        if [ ! -f "${KUBECONFIG}" ]; then
+          echo "ERROR: ${KUBECONFIG} not found. Run 'task test:setup' first." >&2
+          exit 1
+        fi
+        {{.TOOL_DIR}}/chainsaw test test/e2e --config test/e2e/.chainsaw.yaml
+
+  test:teardown:
+    desc: Tear down the kind cluster created by test:setup.
+    silent: true
+    cmds:
+      - task: test-infra:cluster-down

@@ -1,0 +1,22 @@
+# Shared e2e fixtures for chainsaw scenarios.
+#
+# NOTE: these resources target two different clusters:
+#   - organization.yaml and project.yaml are applied to the MANAGEMENT
+#     cluster (milo apiserver root).
+#   - aggregation-labels.yaml is applied to the PROJECT CONTROL PLANE
+#     (reached via the per-project aggregation path). Chainsaw scenarios
+#     should apply it with a kubeconfig/server URL pointing at
+#     {{milo-apiserver}}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane
+#     AFTER the Project's Ready=True condition is set.
+#
+# Individual scenarios typically reference these files directly (e.g. via
+# `kubectl apply -f`) rather than building this kustomization as one unit,
+# because the target clusters differ. This kustomization is provided so
+# `kubectl kustomize` can validate the fixtures in CI.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - organization.yaml
+  - project.yaml
+  - aggregation-labels.yaml

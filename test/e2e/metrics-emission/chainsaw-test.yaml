@@ -1,0 +1,139 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: metrics-emission
+spec:
+  description: |
+    End-to-end verification that a series actually lands in Victoria
+    Metrics. Creates a marker ConfigMap on the project CP and polls
+    VMSingle for the corresponding `datum_configmap_info` series.
+
+    Pipeline exercised:
+        project CP watch -> controller -> OTel collector -> VM remote write
+
+    VM query target:
+        http://vmsingle-telemetry-system-vm.telemetry-system.svc.cluster.local:8428/api/v1/query
+
+  clusters:
+    project-cp:
+      kubeconfig: ./.project-cp.kubeconfig
+
+  steps:
+    - name: prerequisites (org, project, project-cp kubeconfig, aggregation)
+      try:
+        - apply:
+            file: ../fixtures/organization.yaml
+        - apply:
+            file: ../fixtures/project.yaml
+        - assert:
+            timeout: 120s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              metadata:
+                name: e2e-alpha
+              status:
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+        - script:
+            timeout: 30s
+            content: |
+              set -euo pipefail
+              src="${KUBECONFIG:-$HOME/.kube/config}"
+              base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
+              kubectl --kubeconfig "$src" config view --raw --flatten \
+                | sed -E "s#server: ${base_server}\$#server: ${new_server}#" \
+                > ./.project-cp.kubeconfig
+        - apply:
+            cluster: project-cp
+            file: ../fixtures/aggregation-labels.yaml
+
+    - name: apply the policy and wait Ready
+      try:
+        - apply:
+            file: policy.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-metrics-emission
+              status:
+                activeGenerators: 1
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+
+    - name: create a marker ConfigMap on the project CP
+      try:
+        - apply:
+            cluster: project-cp
+            file: marker-configmap.yaml
+        - assert:
+            cluster: project-cp
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: e2e-marker
+                namespace: default
+
+    - name: wait for datum_configmap_info to land in Victoria Metrics
+      try:
+        - script:
+            # OTel collection interval is 5s (see deployment config).
+            # Allow up to 90s for: informer sync -> collection tick ->
+            # OTLP push -> collector remote-write -> VM ingest visibility.
+            timeout: 120s
+            content: |
+              set -euo pipefail
+
+              # Run curl from inside the cluster so we can hit the VM
+              # service DNS directly. `kubectl run --rm -i --restart=Never`
+              # gives us a one-shot container whose stdout we capture.
+              query='datum_configmap_info{name="e2e-marker",project="e2e-alpha"}'
+              vm_url='http://vmsingle-telemetry-system-vm.telemetry-system.svc.cluster.local:8428/api/v1/query'
+
+              attempt=0
+              until [ "$attempt" -ge 18 ]; do
+                attempt=$((attempt+1))
+                echo "attempt $attempt: querying VM for $query"
+                out=$(kubectl run e2e-vmquery-$RANDOM \
+                        --rm -i --restart=Never --quiet \
+                        --image=curlimages/curl:8.10.1 \
+                        --timeout=20s \
+                        -- curl -fsS --max-time 5 --data-urlencode "query=${query}" "${vm_url}" \
+                      || true)
+                # Strip kubectl's pod-termination line.
+                json=$(printf '%s' "$out" | sed '/pod ".*" deleted/d')
+                echo "response: $json"
+                if printf '%s' "$json" | grep -Eq '"result":\s*\[\s*\{'; then
+                  echo "series found"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "series datum_configmap_info{name=e2e-marker,project=e2e-alpha} never appeared" >&2
+              exit 1
+
+    - name: delete marker ConfigMap
+      # Staleness-window verification (series falling off after VM's
+      # default 5m staleness window) is deferred: the window exceeds a
+      # reasonable e2e budget. We only assert here that the series
+      # *existed* (done above). See TODO below.
+      try:
+        - delete:
+            cluster: project-cp
+            ref:
+              apiVersion: v1
+              kind: ConfigMap
+              namespace: default
+              name: e2e-marker
+
+  # TODO: once VM is configured with a shorter staleness window in the
+  # test-infra observability stack (or once the controller emits an
+  # explicit stale marker), add an assertion that queries VM and expects
+  # an empty result for the deleted ConfigMap.
+
+  # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

@@ -1,0 +1,93 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: rbac-denied
+spec:
+  description: |
+    A policy targeting apps/v1 Deployments on a project CP where nothing
+    aggregates the required verbs onto
+    resourcemetrics.miloapis.com:aggregated-reader must report
+    PermissionDenied=True with the Deployment GVR listed in
+    status.missingPermissions.
+
+    This test INTENTIONALLY omits the configmap aggregation label. It
+    also defensively removes any deployment-aggregation ClusterRole a
+    prior (buggy) run might have left behind before asserting.
+
+  clusters:
+    project-cp:
+      kubeconfig: ./.project-cp.kubeconfig
+
+  steps:
+    - name: prerequisites (org, project, project-cp kubeconfig)
+      try:
+        - apply:
+            file: ../fixtures/organization.yaml
+        - apply:
+            file: ../fixtures/project.yaml
+        - assert:
+            timeout: 120s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              metadata:
+                name: e2e-alpha
+              status:
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+        - script:
+            timeout: 30s
+            content: |
+              set -euo pipefail
+              src="${KUBECONFIG:-$HOME/.kube/config}"
+              base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
+              kubectl --kubeconfig "$src" config view --raw --flatten \
+                | sed -E "s#server: ${base_server}\$#server: ${new_server}#" \
+                > ./.project-cp.kubeconfig
+
+    - name: defensively unlabel any pre-existing deployment reader role
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -euo pipefail
+              # Any ClusterRole on the project CP that currently grants
+              # deployments get/list/watch AND carries the aggregation
+              # label would make the test pass spuriously. Strip the
+              # label if present. We don't delete the role (we don't own
+              # the naming), just the label.
+              kubectl --kubeconfig ./.project-cp.kubeconfig get clusterroles \
+                -l 'resourcemetrics.miloapis.com/aggregate-to-reader=true' \
+                -o name \
+                | while read -r role; do
+                    if kubectl --kubeconfig ./.project-cp.kubeconfig get "$role" -o json \
+                        | grep -q '"deployments"'; then
+                      kubectl --kubeconfig ./.project-cp.kubeconfig label "$role" \
+                        'resourcemetrics.miloapis.com/aggregate-to-reader-' --overwrite
+                    fi
+                  done
+
+    - name: apply the policy and assert PermissionDenied
+      try:
+        - apply:
+            file: policy.yaml
+        - assert:
+            # Allow time for SSAR preflight loop + status patch.
+            timeout: 60s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-rbac-denied
+              status:
+                (conditions[?type == 'PermissionDenied'])[0]:
+                  status: "True"
+                (length(missingPermissions) > `0`): true
+                # At least one of the missing GVRs must be the one we
+                # targeted — guards against the controller reporting
+                # missing permissions for some unrelated kind.
+                (missingPermissions[?group == 'apps' && resource == 'deployments'])[0]:
+                  version: v1
+
+  # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

@@ -1,0 +1,36 @@
+# Aggregation:
+#
+# The resource-metrics controller is granted a single aggregated ClusterRole
+# on every project control plane named:
+#
+#   resourcemetrics.miloapis.com:aggregated-reader
+#
+# (see resource-metrics/config/rbac/aggregated-project-role.yaml). Its rules
+# are computed by the kube-apiserver RBAC aggregator from every ClusterRole
+# on the same cluster that carries the label:
+#
+#   resourcemetrics.miloapis.com/aggregate-to-reader: "true"
+#
+# For the e2e scenarios, the target GVR is core/v1 ConfigMaps — the only
+# kind guaranteed to exist inside a freshly-created project CP with no
+# extra CRD bootstrap (milo's per-project setup only ensures the "default"
+# Namespace plus optional Gateway/DNS classes; see
+# milo/internal/controllers/resourcemanager/project_controller.go:243).
+#
+# This ClusterRole MUST be applied to the project control plane, NOT the
+# management cluster, via the aggregation path:
+#   {{milo-apiserver}}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane
+# which is what kubectl/chainsaw will hit when configured with a kubeconfig
+# whose server URL embeds that path.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resourcemetrics-aggregated-configmap-reader
+  labels:
+    app.kubernetes.io/name: resource-metrics
+    app.kubernetes.io/component: project-rbac-aggregation
+    resourcemetrics.miloapis.com/aggregate-to-reader: "true"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]

@@ -1,0 +1,45 @@
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: resource-metrics
+    app.kubernetes.io/managed-by: kustomize
+  name: resourcemetricspolicy-sample
+spec:
+  generators:
+    - name: workload-info
+      resource:
+        group: compute.miloapis.com
+        version: v1alpha1
+        resource: workloads
+      families:
+        - name: workload_info
+          help: "Exposes metadata about each Workload resource."
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: phase
+                  value: "object.status.phase"
+
+    - name: workload-ready-condition
+      resource:
+        group: compute.miloapis.com
+        version: v1alpha1
+        resource: workloads
+      families:
+        - name: workload_status_condition
+          help: "Condition status for each Workload."
+          type: gauge
+          metrics:
+            - value: "object.status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition
+                  value: "'Ready'"

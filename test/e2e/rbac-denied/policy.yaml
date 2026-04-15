@@ -1,0 +1,26 @@
+# Policy targeting apps/v1 Deployments. The project CP has NO
+# aggregation-labelled ClusterRole granting get/list/watch on
+# deployments, so the controller's pre-flight SSAR fails and it must
+# surface status.conditions[PermissionDenied]=True plus
+# status.missingPermissions[].
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-rbac-denied
+spec:
+  generators:
+    - name: deployment-info
+      resource:
+        group: apps
+        version: v1
+        resource: deployments
+      families:
+        - name: deployment_info
+          help: "Exercises the PermissionDenied status path."
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"

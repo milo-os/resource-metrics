@@ -1,0 +1,23 @@
+# Project is the unit of aggregation that resource-metrics watches in
+# discovery.mode=milo with internalServiceDiscovery=false. Milo's Project
+# controller creates a per-project virtual control plane and sets
+# status.conditions[Ready]=True once it is serving
+# (milo/internal/controllers/resourcemanager/project_controller.go:320).
+#
+# resource-metrics then reaches into the project CP via the aggregation
+# path {{milo-apiserver}}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane/...
+# so chainsaw scenarios must wait for Ready=True before creating target
+# resources or aggregation-label ClusterRoles on the project CP.
+#
+# Schema (milo Project CRD):
+#   spec.ownerRef.kind: required, enum=[Organization]
+#   spec.ownerRef.name: required
+# Projects are cluster-scoped.
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: e2e-alpha
+spec:
+  ownerRef:
+    kind: Organization
+    name: e2e-org

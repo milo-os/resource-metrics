@@ -1,0 +1,23 @@
+# Policy with a deliberately unparseable CEL label expression.
+#
+# `object.nope[[[syntax-error` is not valid CEL — the controller should
+# surface this in status (InvalidCEL condition + compilationFailures).
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-invalid-cel
+spec:
+  generators:
+    - name: configmap-info-broken
+      resource:
+        group: ""
+        version: v1
+        resource: configmaps
+      families:
+        - name: configmap_info_broken
+          help: "Exercises the InvalidCEL status path."
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.nope[[[syntax-error"

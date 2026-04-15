@@ -1,0 +1,152 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: policy-lifecycle
+spec:
+  description: |
+    Happy-path lifecycle for ResourceMetricsPolicy. Verifies that the
+    controller:
+      * transitions the policy to Ready=True,
+      * reports activeGenerators == len(spec.generators),
+      * tracks observedGeneration,
+      * cleans up on delete and re-reconciles on re-apply.
+
+  # Register the project control-plane cluster for this test. The
+  # kubeconfig file itself is created by the "setup project-cp kubeconfig"
+  # step below; chainsaw reads the path lazily when a step references it
+  # so this forward declaration is fine.
+  clusters:
+    project-cp:
+      kubeconfig: ./.project-cp.kubeconfig
+
+  steps:
+    - name: apply org + project on management cluster
+      try:
+        - apply:
+            file: ../fixtures/organization.yaml
+        - apply:
+            file: ../fixtures/project.yaml
+        - assert:
+            timeout: 120s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              metadata:
+                name: e2e-alpha
+              status:
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+
+    - name: setup project-cp kubeconfig
+      try:
+        - script:
+            timeout: 30s
+            content: |
+              set -euo pipefail
+
+              # Derive a project-scoped kubeconfig from whichever one is
+              # already in use. We rewrite the cluster's `server` URL to
+              # route through the milo aggregation path for project
+              # e2e-alpha. All credentials, CAs, and proxy settings carry
+              # over from the source kubeconfig unchanged.
+              src="${KUBECONFIG:-$HOME/.kube/config}"
+              if [ ! -f "$src" ]; then
+                echo "source kubeconfig not found at $src" >&2
+                exit 1
+              fi
+
+              # Pick the current context's cluster server URL as our base.
+              base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
+
+              # Copy the raw kubeconfig and substitute the server URL for
+              # every cluster entry. Simpler than surgically editing by
+              # name and robust to single-cluster kubeconfigs.
+              kubectl --kubeconfig "$src" config view --raw --flatten \
+                | sed -E "s#server: ${base_server}\$#server: ${new_server}#" \
+                > ./.project-cp.kubeconfig
+
+              # Smoke-test: the project CP must serve /api to prove the
+              # aggregation path is wired. Retry because the CP may take
+              # a beat to register even after Project Ready=True.
+              for i in 1 2 3 4 5 6 7 8; do
+                if kubectl --kubeconfig ./.project-cp.kubeconfig api-resources \
+                    --api-group='' --request-timeout=5s >/dev/null 2>&1; then
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "project-cp kubeconfig is not serving core API" >&2
+              exit 1
+
+    - name: apply aggregation-labels ClusterRole to project CP
+      try:
+        - apply:
+            cluster: project-cp
+            file: ../fixtures/aggregation-labels.yaml
+        - assert:
+            cluster: project-cp
+            resource:
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              metadata:
+                name: resourcemetrics-aggregated-configmap-reader
+
+    - name: apply the policy and assert Ready
+      try:
+        - apply:
+            file: policy.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-lifecycle
+              status:
+                activeGenerators: 1
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+                  observedGeneration: 1
+                (observedGeneration == 1): true
+
+    - name: delete the policy and confirm it is gone
+      try:
+        - delete:
+            ref:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              name: e2e-lifecycle
+        - error:
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-lifecycle
+
+    - name: re-apply and confirm a fresh reconciliation
+      try:
+        - apply:
+            file: policy.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-lifecycle
+              status:
+                activeGenerators: 1
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+                # After recreation the object has generation 1 again and
+                # the controller must have updated observedGeneration to
+                # match. Asserting equality without pinning to a value
+                # catches "stale status was never touched" bugs.
+                (observedGeneration == metadata.generation): true
+
+  # Cleanup is handled automatically by chainsaw (skipDelete: false in
+  # .chainsaw.yaml) — every resource applied during a step is deleted in
+  # reverse order once the test completes. The shared Organization,
+  # Project, and aggregation ClusterRole are re-applied idempotently by
+  # the next test's setup block.

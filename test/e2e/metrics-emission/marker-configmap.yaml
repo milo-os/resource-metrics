@@ -1,0 +1,9 @@
+# Marker ConfigMap applied to the project control plane so the policy
+# has something to emit for.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-marker
+  namespace: default
+data:
+  purpose: "Emitted as datum_configmap_info by the e2e-metrics-emission policy."

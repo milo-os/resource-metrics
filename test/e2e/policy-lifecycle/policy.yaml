@@ -1,0 +1,26 @@
+# Minimal ResourceMetricsPolicy exercising the happy-path lifecycle.
+#
+# Targets core/v1 ConfigMap (the only GVR guaranteed to exist on a fresh
+# project control plane). Emits `<prefix>configmap_info{name=...}` for
+# every ConfigMap the controller can see across engaged project CPs.
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-lifecycle
+spec:
+  generators:
+    - name: configmap-info
+      resource:
+        group: ""
+        version: v1
+        resource: configmaps
+      families:
+        - name: configmap_info
+          help: "Metadata about each ConfigMap reachable on project control planes."
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"

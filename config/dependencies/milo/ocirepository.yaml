@@ -1,0 +1,19 @@
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: milo
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: oci://ghcr.io/datum-cloud/milo-kustomize
+  # Milo publishes this bundle from milo/.github/workflows/build-apiserver.yaml.
+  # Two tag flavors exist:
+  #   - Semver releases (e.g. v0.24.3) cut from main.
+  #   - Per-merge tags v0.0.0-<branch> (and v0.0.0-main-<timestamp>) for
+  #     rolling deployments.
+  # We pin to a semver release so the e2e harness is reproducible; bump
+  # this deliberately alongside the TEST_INFRA_REPO_REF var in
+  # ../../../Taskfile.yaml. If a feature branch bundle is required,
+  # switch to a v0.0.0-<branch> tag temporarily.
+  ref:
+    tag: v0.24.3

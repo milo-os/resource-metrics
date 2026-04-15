@@ -1,0 +1,38 @@
+# test-infra overlay patches for the resource-metrics manager Deployment.
+#
+# The base Deployment (config/manager/manager.yaml) already wires:
+#   * the --server-config=/config/service-config.yaml flag
+#   * a `service-config` volume mounted at /config, backed by the
+#     `service-config` ConfigMap (renamed to
+#     `resource-metrics-service-config` by config/default's namePrefix)
+#
+# This overlay re-declares those so it's self-documenting at the overlay
+# level and so changes to the base default don't silently drop the
+# e2e wiring. The content of the ConfigMap is substituted by
+# configMapGenerator(behavior: replace) in kustomization.yaml pointing at
+# server-config.yaml. We also set imagePullPolicy so the locally-loaded
+# kind image is picked up.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --server-config=/etc/resource-metrics/server.yaml
+          volumeMounts:
+            # Re-mount the base `service-config` volume at
+            # /etc/resource-metrics so the --server-config path matches.
+            # The base also mounts the same volume at /config; kustomize
+            # strategic merge keys volumeMounts by (name, mountPath), so
+            # both mounts coexist — harmless, the manager only reads the
+            # path passed to --server-config.
+            - name: service-config
+              mountPath: /etc/resource-metrics
+              readOnly: true

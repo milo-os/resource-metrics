@@ -1,0 +1,23 @@
+# Build artifacts
+bin/
+dist/
+cover.out
+*.test
+
+# Task runner remote-taskfile cache (generated per-clone)
+.task/
+
+# Test-infra ephemeral state (kind kubeconfig, cluster dir)
+.test-infra/
+
+# Per-test derived kubeconfig
+.project-cp.kubeconfig
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+
+# Env files (secrets never land here)
+.env
+.env.*

@@ -1,0 +1,17 @@
+# Organization is the parent resource required by Project.spec.ownerRef.
+# The Project CRD enforces ownerRef.kind=Organization (see
+# milo/config/crd/bases/resourcemanager/resourcemanager.miloapis.com_projects.yaml),
+# so every e2e scenario that creates a Project must first create this
+# Organization on the management cluster.
+#
+# A Standard Organization is the minimal valid spec
+# (milo/config/crd/bases/resourcemanager/resourcemanager.miloapis.com_organizations.yaml
+# requires only spec.type, enum {Personal, Standard}).
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Organization
+metadata:
+  name: e2e-org
+  annotations:
+    kubernetes.io/display-name: "E2E Test Organization"
+spec:
+  type: Standard

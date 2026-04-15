@@ -1,0 +1,68 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: partial-compile
+spec:
+  description: |
+    A policy with one valid and one broken generator must run the valid
+    one (activeGenerators == 1) and surface the broken one
+    (compilationFailures == 1, InvalidCEL=True, Degraded=True).
+
+  clusters:
+    project-cp:
+      kubeconfig: ./.project-cp.kubeconfig
+
+  steps:
+    - name: prerequisites (org, project, project-cp kubeconfig, aggregation)
+      try:
+        - apply:
+            file: ../fixtures/organization.yaml
+        - apply:
+            file: ../fixtures/project.yaml
+        - assert:
+            timeout: 120s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              metadata:
+                name: e2e-alpha
+              status:
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+        - script:
+            timeout: 30s
+            content: |
+              set -euo pipefail
+              src="${KUBECONFIG:-$HOME/.kube/config}"
+              base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
+              kubectl --kubeconfig "$src" config view --raw --flatten \
+                | sed -E "s#server: ${base_server}\$#server: ${new_server}#" \
+                > ./.project-cp.kubeconfig
+        - apply:
+            cluster: project-cp
+            file: ../fixtures/aggregation-labels.yaml
+
+    - name: apply the policy and assert partial-compile status
+      try:
+        - apply:
+            file: policy.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-partial-compile
+              status:
+                activeGenerators: 1
+                compilationFailures: 1
+                (conditions[?type == 'InvalidCEL'])[0]:
+                  status: "True"
+                (conditions[?type == 'Degraded'])[0]:
+                  status: "True"
+                # A partially-compiled policy must NOT be reported Ready.
+                (conditions[?type == 'Ready'])[0]:
+                  status: "False"
+
+  # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

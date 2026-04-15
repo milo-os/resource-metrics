@@ -1,0 +1,52 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: milo
+  namespace: flux-system
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 5m
+  prune: true
+  wait: true
+  targetNamespace: milo-system
+  sourceRef:
+    kind: OCIRepository
+    name: milo
+  path: overlays/test-infra
+  # Strip argo-system (argo-events HelmRelease + argo HelmRepository) from the
+  # rendered bundle. resource-metrics e2e does not exercise event-driven flows,
+  # and argo-events brings a NATS JetStream dependency that bloats cluster
+  # footprint and spin-up time. We remove the two resources contributed by
+  # config/dependencies/argo-system using Flux's strategic-merge `$patch: delete`
+  # directive. If milo ever adds more resources to that dependency, extend the
+  # list below.
+  #
+  # Upstream references (milo v0.24.3):
+  #   config/dependencies/argo-system/helm-repository.yaml   → HelmRepository/argo
+  #   config/dependencies/argo-system/argo-events-helm-release.yaml → HelmRelease/argo-events
+  patches:
+    - target:
+        group: helm.toolkit.fluxcd.io
+        version: v2
+        kind: HelmRelease
+        name: argo-events
+      patch: |
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: argo-events
+          namespace: milo-system
+        $patch: delete
+    - target:
+        group: source.toolkit.fluxcd.io
+        version: v1
+        kind: HelmRepository
+        name: argo
+      patch: |
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: HelmRepository
+        metadata:
+          name: argo
+          namespace: milo-system
+        $patch: delete

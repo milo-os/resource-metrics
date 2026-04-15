@@ -1,0 +1,95 @@
+# End-to-end integration suite: brings up kind via test-infra, installs milo
+# and the observability stack, builds/loads the resource-metrics image,
+# deploys the test-infra overlay, and runs the chainsaw suite in test/e2e.
+#
+# Runs on every PR and on pushes to main. Cancels in-flight runs on
+# force-push because kind + milo + chainsaw is ~10-15 minutes cold.
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Run chainsaw e2e suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # The root Taskfile remote-includes datum-cloud/test-infra; required
+      # for `task test:setup` / `task test:teardown` to resolve includes.
+      TASK_X_REMOTE_TASKFILES: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Task CLI
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tools (chainsaw)
+        run: task install-tools
+
+      - name: Bring up cluster and deploy resource-metrics
+        run: task test:setup
+
+      - name: Run chainsaw e2e suite
+        run: task e2e
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p diagnostics
+          {
+            echo "=== cluster events (sorted) ==="
+            kubectl get events -A --sort-by=.lastTimestamp || true
+            echo
+            echo "=== resource-metrics deployment ==="
+            kubectl -n resource-metrics-system describe deployment/resource-metrics-controller-manager || true
+            echo
+            echo "=== resource-metrics pods ==="
+            kubectl -n resource-metrics-system describe pod -l app=resource-metrics || true
+            kubectl -n resource-metrics-system get pods -o wide || true
+            echo
+            echo "=== resource-metrics logs ==="
+            kubectl -n resource-metrics-system logs -l app=resource-metrics --tail=500 --all-containers=true || true
+            kubectl -n resource-metrics-system logs -l control-plane=controller-manager --tail=500 --all-containers=true || true
+            echo
+            echo "=== flux OCIRepository (milo) ==="
+            kubectl -n flux-system get ocirepository milo -o yaml || true
+            echo
+            echo "=== flux Kustomization (milo) ==="
+            kubectl -n flux-system get kustomization milo -o yaml || true
+            echo
+            echo "=== all flux resources ==="
+            kubectl -n flux-system get kustomizations,ocirepositories,helmreleases -o wide || true
+          } > diagnostics/cluster-state.log 2>&1
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics-${{ github.run_id }}
+          path: diagnostics/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Teardown cluster
+        if: always()
+        continue-on-error: true
+        run: task test:teardown

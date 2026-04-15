@@ -1,0 +1,23 @@
+# Same shape as policy-lifecycle; this test asserts that the emitted
+# series actually lands in Victoria Metrics.
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-metrics-emission
+spec:
+  generators:
+    - name: configmap-info
+      resource:
+        group: ""
+        version: v1
+        resource: configmaps
+      families:
+        - name: configmap_info
+          help: "Metadata about each ConfigMap reachable on project control planes."
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"

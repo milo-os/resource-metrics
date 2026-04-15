@@ -1,0 +1,69 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: invalid-cel
+spec:
+  description: |
+    A policy whose only generator contains an unparseable CEL expression
+    must:
+      * set InvalidCEL=True,
+      * report compilationFailures > 0,
+      * report activeGenerators strictly less than spec.generators length
+        (in this case: 0 < 1).
+
+  clusters:
+    project-cp:
+      kubeconfig: ./.project-cp.kubeconfig
+
+  steps:
+    - name: prerequisites (org, project, project-cp kubeconfig, aggregation)
+      try:
+        - apply:
+            file: ../fixtures/organization.yaml
+        - apply:
+            file: ../fixtures/project.yaml
+        - assert:
+            timeout: 120s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              metadata:
+                name: e2e-alpha
+              status:
+                (conditions[?type == 'Ready'])[0]:
+                  status: "True"
+        - script:
+            timeout: 30s
+            content: |
+              set -euo pipefail
+              src="${KUBECONFIG:-$HOME/.kube/config}"
+              base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
+              kubectl --kubeconfig "$src" config view --raw --flatten \
+                | sed -E "s#server: ${base_server}\$#server: ${new_server}#" \
+                > ./.project-cp.kubeconfig
+        - apply:
+            cluster: project-cp
+            file: ../fixtures/aggregation-labels.yaml
+
+    - name: apply the broken policy and assert InvalidCEL
+      try:
+        - apply:
+            file: policy.yaml
+        - assert:
+            timeout: 30s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-invalid-cel
+              status:
+                # With exactly one generator and that generator failing
+                # to compile, activeGenerators is implicitly 0 (the field
+                # is omitempty) and compilationFailures is 1.
+                compilationFailures: 1
+                (activeGenerators == null || activeGenerators == 0): true
+                (conditions[?type == 'InvalidCEL'])[0]:
+                  status: "True"
+
+  # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

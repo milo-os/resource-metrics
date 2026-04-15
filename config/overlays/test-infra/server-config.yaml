@@ -1,0 +1,28 @@
+# Operator configuration consumed by the resource-metrics manager via the
+# --server-config flag. This file is substituted into the base
+# `resource-metrics-service-config` ConfigMap by configMapGenerator with
+# behavior: replace (see kustomization.yaml).
+#
+# The apiVersion/kind are registered by SchemeBuilder in
+# internal/config/groupversion_info.go:
+#   GroupVersion = schema.GroupVersion{Group: "apiserver.config.miloapis.com", Version: "v1alpha1"}
+#   SchemeBuilder.Register(&ResourceMetricsOperator{})
+#
+# Field names come from internal/config/config.go (ResourceMetricsOperator,
+# DiscoveryConfig, OtelConfig).
+apiVersion: apiserver.config.miloapis.com/v1alpha1
+kind: ResourceMetricsOperator
+discovery:
+  mode: milo
+  internalServiceDiscovery: false
+otel:
+  # test-infra's install-observability task deploys an OpenTelemetryCollector
+  # CR named `otel-collector` in namespace `telemetry-system`. The OTel
+  # Operator renders a Service named `<cr-name>-collector` for the otlp
+  # receivers (confirmed in test-infra/Taskfile.yml:448, which rollouts
+  # `daemonset/otel-collector-collector`). The gRPC receiver listens on
+  # port 4317 per the CR config (receivers.otlp.protocols.grpc.endpoint).
+  endpoint: otel-collector-collector.telemetry-system:4317
+  insecure: true
+  collectionInterval: 5s
+  defaultMetricPrefix: datum_

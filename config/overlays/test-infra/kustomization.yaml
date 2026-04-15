@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# test-infra overlay — applied by `task test:deploy` in the e2e harness.
+# It pins the controller image to the :dev tag loaded into kind by
+# `task dev:load`, points the operator at the test-infra observability
+# stack's OTel collector, and flips discovery mode to "milo" so the
+# operator talks to the milo apiserver installed via the Flux bundle in
+# config/dependencies/milo.
+
+resources:
+  - ../../default
+
+# Replace the content of the base `service-config` ConfigMap with the
+# operator config we want for e2e. The generated ConfigMap name is
+# `resource-metrics-service-config` (base uses name `service-config`
+# plus the config/default namePrefix "resource-metrics-"). We key the
+# file `server.yaml` so the manager picks it up at
+# /etc/resource-metrics/server.yaml per deployment-patch.yaml.
+configMapGenerator:
+  - name: service-config
+    behavior: replace
+    files:
+      - server.yaml=server-config.yaml
+    options:
+      disableNameSuffixHash: true
+
+images:
+  - name: ghcr.io/datum-cloud/resource-metrics
+    newName: ghcr.io/datum-cloud/resource-metrics
+    newTag: dev
+
+patches:
+  - target:
+      kind: Deployment
+      name: resource-metrics-controller-manager
+    path: deployment-patch.yaml

@@ -1,0 +1,54 @@
+# Chainsaw runner configuration for the resource-metrics e2e suite.
+#
+# Multi-cluster strategy:
+#
+# The tests need to talk to two distinct API surfaces:
+#
+#   1. The management cluster (Milo's root apiserver), where Organization,
+#      Project, and ResourceMetricsPolicy resources live. This is the
+#      default kubeconfig used by `task e2e` and by plain `apply:` /
+#      `assert:` steps.
+#
+#   2. Each project's virtual control plane, reached via the aggregation
+#      path
+#         <milo-apiserver>/apis/resourcemanager.miloapis.com/v1alpha1/projects/<name>/control-plane
+#      This server URL embeds the project name, so the kubeconfig cannot
+#      be known until a Project has been created and has become Ready.
+#
+# Chainsaw does support a `clusters` map in Configuration, but entries
+# resolve their kubeconfig paths relative to the test BasePath at *load*
+# time (see pkg/runner/context/helpers.go#WithClusters). We therefore
+# register the project-CP cluster per-test, inside each chainsaw-test.yaml
+# via a `script:` setup step that writes `./.project-cp.kubeconfig` next
+# to the test file, plus a test-level `clusters:` block pointing at that
+# same relative path. The file path is predictable because chainsaw
+# changes into the test directory before running `script:` steps.
+#
+# Why not register the project-CP cluster here at the Configuration level?
+# The Project `e2e-alpha` is created by the policy-lifecycle test; its
+# kubeconfig does not exist before that test runs. Binding per-test keeps
+# each scenario independently runnable with `chainsaw test test/e2e/<dir>`.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Configuration
+metadata:
+  name: resource-metrics-e2e
+spec:
+  # Tests share fixtures (Organization, Project, aggregation ClusterRole)
+  # on a single kind cluster. Running in parallel would race on Project
+  # Ready, on policy names, and on emitted-metric cardinality. Keep
+  # sequential.
+  parallel: 1
+
+  timeouts:
+    apply: 30s
+    assert: 60s
+    error: 30s
+    delete: 30s
+    cleanup: 60s
+    exec: 120s
+
+  # Default behaviour: delete resources on pass so the next test starts
+  # from a known state. Fixtures that are shared across tests (Org,
+  # Project, aggregation ClusterRole) are re-applied idempotently by each
+  # test's setup block, so per-test cleanup is safe.
+  skipDelete: false

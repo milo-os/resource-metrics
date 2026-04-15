@@ -1,0 +1,29 @@
+# This ClusterRole is deployed to every PROJECT CONTROL PLANE (not the
+# management cluster). It is the aggregation target for CRD owners that want
+# their resources to become visible to the resource-metrics controller: any
+# ClusterRole bearing the label
+#
+#   resourcemetrics.miloapis.com/aggregate-to-reader: "true"
+#
+# contributes its rules here at aggregation time. The controller's service
+# account is then granted this aggregated role on the project CP via a
+# ClusterRoleBinding (wired out-of-band by the project CP bootstrap).
+#
+# NOTE: do not add this file to the kustomization.yaml in this directory.
+# This resource is not deployed to the management cluster; it is meant to
+# be consumed by the project-CP tooling that lays down per-project RBAC.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resourcemetrics.miloapis.com:aggregated-reader
+  labels:
+    app.kubernetes.io/name: resource-metrics
+    app.kubernetes.io/component: project-rbac
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        resourcemetrics.miloapis.com/aggregate-to-reader: "true"
+# rules is intentionally empty: the kube-apiserver computes the effective
+# rules from every ClusterRole that matches the selector above.
+rules: []
