@@ -8,11 +8,22 @@ import (
 	"time"
 )
 
-// requireCondition polls cond every 25ms until it returns true or timeout
-// elapses. On timeout it fails the test with the supplied message.
-func requireCondition(t *testing.T, timeout time.Duration, cond func() bool, format string, args ...any) {
+const (
+	// pollTimeout bounds how long requireCondition waits for cond to go
+	// true. 5s matches the slowest informer / cache-sync helper in this
+	// package.
+	pollTimeout = 5 * time.Second
+	// cleanupTimeout bounds Stop()-style cleanup contexts built by the
+	// tests. Kept snug so a hung Stop() fails fast.
+	cleanupTimeout = 5 * time.Second
+)
+
+// requireCondition polls cond every 25ms until it returns true or
+// pollTimeout elapses. On timeout it fails the test with the supplied
+// message.
+func requireCondition(t *testing.T, cond func() bool, format string, args ...any) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(pollTimeout)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
@@ -22,8 +33,8 @@ func requireCondition(t *testing.T, timeout time.Duration, cond func() bool, for
 	t.Fatalf(format, args...)
 }
 
-// contextWithTimeout is a small shim so tests can keep their cleanup
+// cleanupContext is a small shim so tests can keep their cleanup
 // sequences short.
-func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), d)
+func cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), cleanupTimeout)
 }

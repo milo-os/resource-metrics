@@ -103,12 +103,11 @@ func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcr
 		controllermetrics.CompilesTotal.WithLabelValues("error").Inc()
 	}
 
-	// Upsert into the registry (Registry.Upsert re-runs Compile and keys
-	// by obj.Name/Namespace — cluster-scoped policies land on a namespace="" key).
-	if _, _ = r.Registry.Upsert(&obj); false {
-		// noop: Registry.Upsert never returns an error; the compile errors
-		// are what we surface to users via status, not a hard failure.
-	}
+	// Upsert into the registry (Registry.Upsert re-runs Compile and keys by
+	// obj.Name/Namespace — cluster-scoped policies land on a namespace="" key).
+	// Return values are intentionally discarded: compile errors surface via
+	// status; Upsert doesn't fail hard.
+	_, _ = r.Registry.Upsert(&obj)
 
 	// Order is: Registry → OTel.Sync → WakeAll. The OTel data plane is
 	// periodic-reader driven, not event-driven — callbacks walk live collectors

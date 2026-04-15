@@ -87,7 +87,7 @@ func makePolicy(name string, gvrs ...schema.GroupVersionResource) *v1alpha1.Reso
 	}
 }
 
-func newTestCollector(t *testing.T) (*ProjectCollector, *policy.Registry, *dynamicfake.FakeDynamicClient) {
+func newTestCollector(t *testing.T) (*ProjectCollector, *policy.Registry) {
 	t.Helper()
 
 	env, err := policy.NewEnv()
@@ -105,17 +105,17 @@ func newTestCollector(t *testing.T) (*ProjectCollector, *policy.Registry, *dynam
 		reg,
 		testr.New(t),
 	)
-	return pc, reg, dynClient
+	return pc, reg
 }
 
 func TestReconcile_AddsInformerForDesiredGVR(t *testing.T) {
-	pc, reg, _ := newTestCollector(t)
+	pc, reg := newTestCollector(t)
 
 	if err := pc.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() {
-		stopCtx, cancel := contextWithTimeout(5 * time.Second)
+		stopCtx, cancel := cleanupContext()
 		defer cancel()
 		_ = pc.Stop(stopCtx)
 	})
@@ -127,7 +127,7 @@ func TestReconcile_AddsInformerForDesiredGVR(t *testing.T) {
 	pc.Wake()
 
 	// Poll until reconcile has installed the informer and it is synced.
-	requireCondition(t, 5*time.Second, func() bool {
+	requireCondition(t, func() bool {
 		pc.mu.RLock()
 		defer pc.mu.RUnlock()
 		inf, ok := pc.informers[testGVR]
@@ -143,10 +143,10 @@ func TestReconcile_AddsInformerForDesiredGVR(t *testing.T) {
 }
 
 func TestReconcile_RemovesInformerWhenPolicyDeleted(t *testing.T) {
-	pc, reg, _ := newTestCollector(t)
+	pc, reg := newTestCollector(t)
 	require.NoError(t, pc.Start(t.Context()))
 	t.Cleanup(func() {
-		stopCtx, cancel := contextWithTimeout(5 * time.Second)
+		stopCtx, cancel := cleanupContext()
 		defer cancel()
 		_ = pc.Stop(stopCtx)
 	})
@@ -155,7 +155,7 @@ func TestReconcile_RemovesInformerWhenPolicyDeleted(t *testing.T) {
 	require.Empty(t, errs)
 	pc.Wake()
 
-	requireCondition(t, 5*time.Second, func() bool {
+	requireCondition(t, func() bool {
 		pc.mu.RLock()
 		defer pc.mu.RUnlock()
 		inf, ok := pc.informers[testGVR]
@@ -165,7 +165,7 @@ func TestReconcile_RemovesInformerWhenPolicyDeleted(t *testing.T) {
 	reg.Delete(cp.Name)
 	pc.Wake()
 
-	requireCondition(t, 5*time.Second, func() bool {
+	requireCondition(t, func() bool {
 		pc.mu.RLock()
 		defer pc.mu.RUnlock()
 		_, ok := pc.informers[testGVR]
@@ -212,7 +212,7 @@ func TestReconcile_RemovesEntryAfterCacheSyncFailure(t *testing.T) {
 	)
 	require.NoError(t, pc.Start(t.Context()))
 	t.Cleanup(func() {
-		stopCtx, cancel := contextWithTimeout(5 * time.Second)
+		stopCtx, cancel := cleanupContext()
 		defer cancel()
 		_ = pc.Stop(stopCtx)
 	})
@@ -224,7 +224,7 @@ func TestReconcile_RemovesEntryAfterCacheSyncFailure(t *testing.T) {
 	// The reconcile that processes this wake will block for
 	// cacheSyncTimeout, then return. After that, the informers map must
 	// NOT contain testGVR.
-	requireCondition(t, 5*time.Second, func() bool {
+	requireCondition(t, func() bool {
 		pc.mu.RLock()
 		defer pc.mu.RUnlock()
 		_, ok := pc.informers[testGVR]
@@ -241,10 +241,10 @@ func TestReconcile_RemovesEntryAfterCacheSyncFailure(t *testing.T) {
 }
 
 func TestReconcile_DuplicateGVRIsNoop(t *testing.T) {
-	pc, reg, _ := newTestCollector(t)
+	pc, reg := newTestCollector(t)
 	require.NoError(t, pc.Start(t.Context()))
 	t.Cleanup(func() {
-		stopCtx, cancel := contextWithTimeout(5 * time.Second)
+		stopCtx, cancel := cleanupContext()
 		defer cancel()
 		_ = pc.Stop(stopCtx)
 	})
@@ -256,7 +256,7 @@ func TestReconcile_DuplicateGVRIsNoop(t *testing.T) {
 	require.Empty(t, errs)
 	pc.Wake()
 
-	requireCondition(t, 5*time.Second, func() bool {
+	requireCondition(t, func() bool {
 		pc.mu.RLock()
 		defer pc.mu.RUnlock()
 		inf, ok := pc.informers[testGVR]

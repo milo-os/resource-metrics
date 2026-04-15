@@ -172,9 +172,9 @@ func (DefaultReporter) ReportCycleBudgetExhausted(family string) {
 type NopReporter struct{}
 
 func (NopReporter) ReportEvalError(string, string)    {}
-func (NopReporter) ReportEvalPanic()                   {}
-func (NopReporter) ReportRBACDenied(string, string)    {}
-func (NopReporter) ReportSeriesEmitted(string)         {}
-func (NopReporter) ReportCompileOutcome(bool)          {}
-func (NopReporter) ReportLabelSanitized()              {}
+func (NopReporter) ReportEvalPanic()                  {}
+func (NopReporter) ReportRBACDenied(string, string)   {}
+func (NopReporter) ReportSeriesEmitted(string)        {}
+func (NopReporter) ReportCompileOutcome(bool)         {}
+func (NopReporter) ReportLabelSanitized()             {}
 func (NopReporter) ReportCycleBudgetExhausted(string) {}
