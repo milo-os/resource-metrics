@@ -26,6 +26,10 @@ jobs:
       # The root Taskfile remote-includes datum-cloud/test-infra; required
       # for `task test:setup` / `task test:teardown` to resolve includes.
       TASK_X_REMOTE_TASKFILES: '1'
+      # Auto-accept trust prompts for the remote Taskfile include; CI has
+      # no TTY to answer interactively. Equivalent to invoking every task
+      # with --yes.
+      FORCE_COLOR: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,13 +47,13 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install tools (chainsaw)
-        run: task install-tools
+        run: task --yes install-tools
 
       - name: Bring up cluster and deploy resource-metrics
-        run: task test:setup
+        run: task --yes test:setup
 
       - name: Run chainsaw e2e suite
-        run: task e2e
+        run: task --yes e2e
 
       - name: Collect diagnostics on failure
         if: failure()
@@ -92,4 +96,4 @@ jobs:
       - name: Teardown cluster
         if: always()
         continue-on-error: true
-        run: task test:teardown
+        run: task --yes test:teardown
