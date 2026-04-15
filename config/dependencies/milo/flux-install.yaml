@@ -14,6 +14,13 @@ spec:
     kind: OCIRepository
     name: milo
   path: overlays/test-infra
+  # The upstream test-infra overlay sets `images[].newTag: dev` because it
+  # assumes local dev where you have built and `kind load`-ed the milo
+  # image. CI pulls from the registry, so we override the tag to match the
+  # OCI bundle pin. Keep in sync with MILO_REPO_REF in Taskfile.yaml.
+  images:
+    - name: ghcr.io/datum-cloud/milo
+      newTag: v0.24.3
   # Strip argo-system (argo-events HelmRelease + argo HelmRepository) from the
   # rendered bundle. resource-metrics e2e does not exercise event-driven flows,
   # and argo-events brings a NATS JetStream dependency that bloats cluster
