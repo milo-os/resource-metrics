@@ -129,7 +129,24 @@ tasks:
           task test-infra:kubectl -- -n milo-system describe helmrelease --all >&2 || true
           exit 1
         fi
-      - task: test-infra:install-observability
+      # test-infra's install-observability has a race: it waits for the
+      # OpenTelemetryCollector CRD `Established` condition and then applies
+      # a v1beta1 CR, but the conversion webhook often isn't registered
+      # yet — the apply fails with "no matches for kind" and tears down
+      # the whole task. Retry up to 5x over 5 minutes before giving up,
+      # since the webhook is usually healthy within 60s.
+      - |
+        set -e
+        attempts=0
+        until task --yes test-infra:install-observability; do
+          attempts=$((attempts+1))
+          if [ "$attempts" -ge 5 ]; then
+            echo "install-observability failed after $attempts attempts" >&2
+            exit 1
+          fi
+          echo "install-observability attempt $attempts failed; waiting 30s before retry" >&2
+          sleep 30
+        done
 
   test:deploy:
     desc: Deploy resource-metrics via the test-infra overlay.
