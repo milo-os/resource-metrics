@@ -22,4 +22,7 @@ jobs:
       - name: Run linter
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1.2
+          # v2.1.2 was built with go1.24; our module declares go 1.25.0
+          # via the cel.dev/expr transitive dep. Use a newer release
+          # compiled against go 1.25+.
+          version: v2.5.0
