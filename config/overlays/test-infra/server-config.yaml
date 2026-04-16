@@ -15,6 +15,14 @@ kind: ResourceMetricsOperator
 discovery:
   mode: milo
   internalServiceDiscovery: false
+  # Point project discovery and per-project client construction at
+  # milo-apiserver (mounted from the milo-kubeconfig Secret). Without
+  # this, the controller falls back to the in-cluster ServiceAccount
+  # kubeconfig, which targets the kind apiserver — and kind does not
+  # serve resourcemanager.miloapis.com, so Project discovery finds
+  # nothing.
+  discoveryKubeconfigPath: /etc/milo/kubeconfig
+  projectKubeconfigPath: /etc/milo/kubeconfig
 otel:
   # test-infra's install-otel-collector task deploys an OpenTelemetryCollector
   # CR named `otel-collector` in namespace `otel-collector-system`. The OTel

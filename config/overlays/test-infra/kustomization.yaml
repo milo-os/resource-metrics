@@ -10,6 +10,7 @@ kind: Kustomization
 
 resources:
   - ../../default
+  - milo-kubeconfig-secret.yaml
 
 # Replace the content of the base `service-config` ConfigMap with the
 # operator config we want for e2e. The generated ConfigMap name is

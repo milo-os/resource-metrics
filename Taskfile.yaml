@@ -188,6 +188,57 @@ tasks:
       - task test-infra:kubectl -- apply -k config/overlays/test-infra
       - task test-infra:kubectl -- -n resource-metrics-system rollout status deployment/resource-metrics-controller-manager --timeout=180s
 
+  test:milo-kubeconfig:
+    desc: Generate a kubeconfig that targets milo-apiserver via the test-infra envoy gateway.
+    silent: true
+    # The chainsaw e2e suite applies resourcemanager.miloapis.com APIs
+    # (Organization, Project, …) which are served by the milo-apiserver
+    # pod, not the kind apiserver. milo's overlays/test-infra exposes
+    # the apiserver via an HTTPRoute on the merged envoy gateway
+    # (NodePort 30443 -> port 8443 inside the gateway pod). The test
+    # token (`test-admin-token` -> system:masters) lives in Secret
+    # milo-apiserver-auth-tokens in milo-system; it is created by
+    # milo's overlays/test-infra/components/auth/auth-tokens-secret.yaml
+    # and is intended for test harnesses.
+    cmds:
+      - |
+        set -euo pipefail
+        kind_kubeconfig="{{.USER_WORKING_DIR}}/.test-infra/kubeconfig"
+        out="{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig"
+        if [ ! -f "$kind_kubeconfig" ]; then
+          echo "ERROR: $kind_kubeconfig not found. Run 'task test:setup' first." >&2
+          exit 1
+        fi
+        token=$(kubectl --kubeconfig "$kind_kubeconfig" -n milo-system \
+          get secret milo-apiserver-auth-tokens \
+          -o jsonpath='{.data.tokens\.csv}' | base64 -d \
+          | awk -F',' '$2=="admin"{print $1; exit}')
+        if [ -z "$token" ]; then
+          echo "ERROR: admin token not found in milo-apiserver-auth-tokens" >&2
+          exit 1
+        fi
+        cat > "$out" <<EOF
+        apiVersion: v1
+        kind: Config
+        clusters:
+        - name: milo-test-infra
+          cluster:
+            server: https://localhost:30443
+            insecure-skip-tls-verify: true
+        users:
+        - name: milo-admin
+          user:
+            token: ${token}
+        contexts:
+        - name: milo-test-infra
+          context:
+            cluster: milo-test-infra
+            user: milo-admin
+        current-context: milo-test-infra
+        EOF
+        chmod 600 "$out"
+        echo "Wrote milo kubeconfig to $out"
+
   test:setup:
     desc: Bring up kind, install dependencies, build/load images, deploy test overlay.
     silent: true
@@ -197,21 +248,25 @@ tasks:
       - task: dev:build
       - task: dev:load
       - task: test:deploy
+      - task: test:milo-kubeconfig
 
   e2e:
     desc: Run chainsaw e2e tests against test/e2e.
     silent: true
     deps: [install-tools]
     cmds:
-      # KUBECONFIG is pinned to the isolated test-infra kubeconfig so the
-      # chainsaw setup steps that derive a per-project kubeconfig via `sed`
-      # on the server URL cannot corrupt a developer's ~/.kube/config. CI
-      # has no pre-existing kubeconfig so this is a no-op there.
+      # KUBECONFIG points at the milo-targeted kubeconfig because the
+      # chainsaw fixtures apply resourcemanager.miloapis.com resources
+      # (Organization, Project, …) that only exist on milo-apiserver.
+      # The chainsaw setup steps that derive a per-project kubeconfig
+      # via `sed` on the server URL still work — the rewritten URL
+      # appends the project-CP path prefix that milo recognizes on the
+      # same gateway endpoint.
       - |
         set -e
-        export KUBECONFIG="{{.USER_WORKING_DIR}}/.test-infra/kubeconfig"
+        export KUBECONFIG="{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig"
         if [ ! -f "${KUBECONFIG}" ]; then
-          echo "ERROR: ${KUBECONFIG} not found. Run 'task test:setup' first." >&2
+          echo "ERROR: ${KUBECONFIG} not found. Run 'task test:setup' (or 'task test:milo-kubeconfig') first." >&2
           exit 1
         fi
         {{.TOOL_DIR}}/chainsaw test test/e2e --config test/e2e/.chainsaw.yaml

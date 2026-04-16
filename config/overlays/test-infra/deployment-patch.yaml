@@ -36,3 +36,15 @@ spec:
             - name: service-config
               mountPath: /etc/resource-metrics
               readOnly: true
+            # Milo kubeconfig: the controller reads this to discover
+            # Projects (and to reach project control planes) via the
+            # milo-apiserver instead of the kind apiserver. Paths here
+            # match discovery.discoveryKubeconfigPath and
+            # discovery.projectKubeconfigPath in server-config.yaml.
+            - name: milo-kubeconfig
+              mountPath: /etc/milo
+              readOnly: true
+      volumes:
+        - name: milo-kubeconfig
+          secret:
+            secretName: milo-kubeconfig
