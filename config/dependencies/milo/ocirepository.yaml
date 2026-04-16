@@ -15,5 +15,10 @@ spec:
   # this deliberately alongside the TEST_INFRA_REPO_REF var in
   # ../../../Taskfile.yaml. If a feature branch bundle is required,
   # switch to a v0.0.0-<branch> tag temporarily.
+  #
+  # Temporarily tracking the v0.0.0-main floating tag: the latest
+  # semver (v0.24.3) was cut before the multi-arch (amd64+arm64)
+  # publish on 2026-04-16, so it fails ImagePullBackOff on arm64 kind
+  # clusters. Revert to the next semver once one is cut post multi-arch.
   ref:
-    tag: v0.24.3
+    tag: v0.0.0-main

@@ -20,7 +20,7 @@ spec:
   # OCI bundle pin. Keep in sync with MILO_REPO_REF in Taskfile.yaml.
   images:
     - name: ghcr.io/datum-cloud/milo
-      newTag: v0.24.3
+      newTag: v0.0.0-main
   # Strip argo-system (argo-events HelmRelease + argo HelmRepository) from the
   # rendered bundle. resource-metrics e2e does not exercise event-driven flows,
   # and argo-events brings a NATS JetStream dependency that bloats cluster

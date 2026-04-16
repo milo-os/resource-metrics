@@ -21,8 +21,14 @@ vars:
   # `infra/apps/datum-control-plane-system/.../production/milo-oci-repository-patch.yaml`,
   # which contains `overlays/test-infra` as of milo commit 4c62124d.
   # Bump this deliberately alongside test-infra and other sibling repos.
-  MILO_REPO_REF: 'v0.24.3'
-  CHAINSAW_VERSION: 'v0.2.12'
+  # Temporarily on the v0.0.0-main floating tag — v0.24.3 was cut before
+  # the multi-arch publish (2026-04-16), so arm64 kind clusters on macOS
+  # get ImagePullBackOff. Revert to a semver once one is cut post multi-arch.
+  MILO_REPO_REF: 'v0.0.0-main'
+  # v0.2.12 fails to compile under Go 1.25 (testing.testDeps interface
+  # gained a ModulePath method). v0.2.14 is the first release that compiles
+  # cleanly. Bump this when a newer chainsaw is desired.
+  CHAINSAW_VERSION: 'v0.2.14'
 
 includes:
   # Remote taskfile from datum-cloud/test-infra. Requires
@@ -50,10 +56,26 @@ tasks:
         set -e
         mkdir -p {{.TOOL_DIR}}
 
+        # We download the prebuilt chainsaw release rather than `go install`
+        # because chainsaw's runner package doesn't compile under Go 1.25
+        # (testing.testDeps gained a ModulePath method that chainsaw's
+        # internal TestDeps shim doesn't implement — reproducible through at
+        # least v0.2.15-beta.3). Prebuilt releases are built with an older
+        # Go toolchain and are unaffected.
         if [ ! -f "{{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}" ]; then
           echo "Installing chainsaw {{.CHAINSAW_VERSION}}..."
-          GOBIN={{.TOOL_DIR}} go install github.com/kyverno/chainsaw@{{.CHAINSAW_VERSION}}
-          mv {{.TOOL_DIR}}/chainsaw {{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}
+          os=$(uname -s | tr '[:upper:]' '[:lower:]')
+          case "$(uname -m)" in
+            x86_64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
+          esac
+          url="https://github.com/kyverno/chainsaw/releases/download/{{.CHAINSAW_VERSION}}/chainsaw_${os}_${arch}.tar.gz"
+          tmpdir=$(mktemp -d)
+          trap 'rm -rf "$tmpdir"' EXIT
+          curl -fsSL "$url" | tar -xz -C "$tmpdir"
+          mv "$tmpdir/chainsaw" "{{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}"
+          chmod +x "{{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}}"
         fi
         ln -sf {{.TOOL_DIR}}/chainsaw-{{.CHAINSAW_VERSION}} {{.TOOL_DIR}}/chainsaw
     status:
