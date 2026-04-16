@@ -22,7 +22,7 @@ func TestResourceMetricsOperator_String_RedactsHeaders(t *testing.T) {
 
 	cfg := &ResourceMetricsOperator{
 		Otel: OtelConfig{
-			Endpoint: "otel-collector.telemetry-system:4317",
+			Endpoint: "otel-collector-collector.otel-collector-system:4317",
 			Headers: map[string]string{
 				"Authorization": bearerValue,
 				"X-Tenant":      tenantValue,
@@ -54,7 +54,7 @@ func TestResourceMetricsOperator_String_RedactsHeaders(t *testing.T) {
 	}
 
 	// The non-sensitive fields should still surface so the log is useful.
-	if !strings.Contains(got, "otel-collector.telemetry-system:4317") {
+	if !strings.Contains(got, "otel-collector-collector.otel-collector-system:4317") {
 		t.Errorf("String() output missing endpoint; got: %s", got)
 	}
 }

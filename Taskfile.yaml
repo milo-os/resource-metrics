@@ -4,7 +4,11 @@ dotenv: ['.env']
 
 vars:
   TOOL_DIR: "{{.USER_WORKING_DIR}}/bin"
-  TEST_INFRA_REPO_REF: 'v0.6.4'
+  # Tracking datum-cloud/test-infra#28 (feat/composable-observability) while
+  # the PR is under review — it splits install-observability into per-
+  # component tasks so kind CI can skip Grafana/Loki/Tempo. Bump back to a
+  # semver tag once the PR merges and a release is cut.
+  TEST_INFRA_REPO_REF: 'feat/composable-observability'
   TEST_INFRA_CLUSTER_NAME: 'test-infra'
   IMG_NAME: 'ghcr.io/datum-cloud/resource-metrics'
   IMG_TAG: 'dev'
@@ -129,22 +133,29 @@ tasks:
           task test-infra:kubectl -- -n milo-system describe helmrelease --all >&2 || true
           exit 1
         fi
-      # test-infra's install-observability has a race: it waits for the
-      # OpenTelemetryCollector CRD `Established` condition and then applies
-      # a v1beta1 CR, but the conversion webhook often isn't registered
-      # yet — the apply fails with "no matches for kind" and tears down
-      # the whole task. Retry up to 5x over 5 minutes before giving up,
-      # since the webhook is usually healthy within 60s.
+      # Install only the observability components we need for the e2e
+      # suite: VictoriaMetrics (target for OTLP remote-write) and the
+      # OpenTelemetry Collector (OTLP receiver). Grafana/Loki/Tempo are
+      # skipped — the single-node kind CI runner can't keep the full
+      # stack healthy in parallel with milo + the controller under test.
+      #
+      # install-otel-collector has a race: it waits for the
+      # OpenTelemetryCollector CRD `Established` condition and then
+      # applies a v1beta1 CR, but the conversion webhook often isn't
+      # registered yet — the apply fails with "no matches for kind".
+      # Retry up to 5x over 5 minutes; the webhook is usually healthy
+      # within 60s.
+      - task --yes test-infra:install-victoria-metrics
       - |
         set -e
         attempts=0
-        until task --yes test-infra:install-observability; do
+        until task --yes test-infra:install-otel-collector; do
           attempts=$((attempts+1))
           if [ "$attempts" -ge 5 ]; then
-            echo "install-observability failed after $attempts attempts" >&2
+            echo "install-otel-collector failed after $attempts attempts" >&2
             exit 1
           fi
-          echo "install-observability attempt $attempts failed; waiting 30s before retry" >&2
+          echo "install-otel-collector attempt $attempts failed; waiting 30s before retry" >&2
           sleep 30
         done
 

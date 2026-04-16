@@ -16,13 +16,12 @@ discovery:
   mode: milo
   internalServiceDiscovery: false
 otel:
-  # test-infra's install-observability task deploys an OpenTelemetryCollector
-  # CR named `otel-collector` in namespace `telemetry-system`. The OTel
+  # test-infra's install-otel-collector task deploys an OpenTelemetryCollector
+  # CR named `otel-collector` in namespace `otel-collector-system`. The OTel
   # Operator renders a Service named `<cr-name>-collector` for the otlp
-  # receivers (confirmed in test-infra/Taskfile.yml:448, which rollouts
-  # `daemonset/otel-collector-collector`). The gRPC receiver listens on
-  # port 4317 per the CR config (receivers.otlp.protocols.grpc.endpoint).
-  endpoint: otel-collector-collector.telemetry-system:4317
+  # receivers. The gRPC receiver listens on port 4317 per the CR config
+  # (receivers.otlp.protocols.grpc.endpoint).
+  endpoint: otel-collector-collector.otel-collector-system:4317
   insecure: true
   collectionInterval: 5s
   defaultMetricPrefix: datum_

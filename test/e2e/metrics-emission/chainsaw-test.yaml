@@ -12,7 +12,7 @@ spec:
         project CP watch -> controller -> OTel collector -> VM remote write
 
     VM query target:
-        http://vmsingle-telemetry-system-vm.telemetry-system.svc.cluster.local:8428/api/v1/query
+        http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query
 
   clusters:
     project-cp:
@@ -93,7 +93,7 @@ spec:
               # service DNS directly. `kubectl run --rm -i --restart=Never`
               # gives us a one-shot container whose stdout we capture.
               query='datum_configmap_info{name="e2e-marker",project="e2e-alpha"}'
-              vm_url='http://vmsingle-telemetry-system-vm.telemetry-system.svc.cluster.local:8428/api/v1/query'
+              vm_url='http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query'
 
               attempt=0
               until [ "$attempt" -ge 18 ]; do

@@ -44,7 +44,7 @@ type ResourceMetricsOperator struct {
 // OtelConfig configures the OpenTelemetry / OTLP export pipeline.
 type OtelConfig struct {
 	// Endpoint is the OTLP/gRPC endpoint (host:port) to export metrics
-	// to. Defaults to "otel-collector.telemetry-system:4317".
+	// to. Defaults to "otel-collector-collector.otel-collector-system:4317".
 	Endpoint string `json:"endpoint"`
 
 	// Insecure disables TLS on the OTLP connection. Defaults to false.
@@ -101,7 +101,7 @@ func SetDefaults_DiscoveryConfig(obj *DiscoveryConfig) {
 // SetDefaults_OtelConfig sets default values for OtelConfig.
 func SetDefaults_OtelConfig(obj *OtelConfig) {
 	if obj.Endpoint == "" {
-		obj.Endpoint = "otel-collector.telemetry-system:4317"
+		obj.Endpoint = "otel-collector-collector.otel-collector-system:4317"
 	}
 	if obj.CollectionInterval.Duration == 0 {
 		obj.CollectionInterval = metav1.Duration{Duration: 30 * time.Second}

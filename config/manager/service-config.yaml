@@ -9,7 +9,7 @@ discovery:
   mode: single
   internalServiceDiscovery: false
 otel:
-  endpoint: otel-collector-collector.telemetry-system:4317
+  endpoint: otel-collector-collector.otel-collector-system:4317
   insecure: true
   collectionInterval: 30s
   defaultMetricPrefix: datum_
