@@ -72,8 +72,10 @@ spec:
     - name: apply the policy and assert PermissionDenied
       try:
         - apply:
+            cluster: milo
             file: policy.yaml
         - assert:
+            cluster: milo
             # Allow time for SSAR preflight loop + status patch.
             timeout: 60s
             resource:
@@ -83,11 +85,12 @@ spec:
                 name: e2e-rbac-denied
               status:
                 (length(conditions[?type == 'PermissionDenied' && status == 'True']) > `0`): true
-                (length(missingPermissions) > `0`): true
                 # At least one of the missing GVRs must be the one we
                 # targeted — guards against the controller reporting
-                # missing permissions for some unrelated kind.
-                (missingPermissions[?group == 'apps' && resource == 'deployments'])[0]:
-                  version: v1
+                # missing permissions for some unrelated kind. The
+                # `missingPermissions || [] ` form coalesces nil to an
+                # empty array; without it length() errors when the
+                # status hasn't yet been written.
+                (length((missingPermissions || `[]`)[?group == 'apps' && resource == 'deployments' && version == 'v1']) > `0`): true
 
   # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

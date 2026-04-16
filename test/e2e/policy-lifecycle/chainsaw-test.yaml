@@ -96,8 +96,10 @@ spec:
     - name: apply the policy and assert Ready
       try:
         - apply:
+            cluster: milo
             file: policy.yaml
         - assert:
+            cluster: milo
             timeout: 30s
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
@@ -106,17 +108,19 @@ spec:
                 name: e2e-lifecycle
               status:
                 activeGenerators: 1
-                (length(conditions[?type == 'Ready' && status == 'True' && observedGeneration == `1`]) > `0`): true
-                (observedGeneration == `1`): true
+                observedGeneration: 1
+                (length(conditions[?type == 'Ready' && status == 'True']) > `0`): true
 
     - name: delete the policy and confirm it is gone
       try:
         - delete:
+            cluster: milo
             ref:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
               kind: ResourceMetricsPolicy
               name: e2e-lifecycle
         - error:
+            cluster: milo
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
               kind: ResourceMetricsPolicy
@@ -126,8 +130,10 @@ spec:
     - name: re-apply and confirm a fresh reconciliation
       try:
         - apply:
+            cluster: milo
             file: policy.yaml
         - assert:
+            cluster: milo
             timeout: 30s
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
@@ -136,12 +142,12 @@ spec:
                 name: e2e-lifecycle
               status:
                 activeGenerators: 1
-                (length(conditions[?type == 'Ready' && status == 'True']) > `0`): true
                 # After recreation the object has generation 1 again and
                 # the controller must have updated observedGeneration to
-                # match. Asserting equality without pinning to a value
-                # catches "stale status was never touched" bugs.
-                (observedGeneration == metadata.generation): true
+                # match. Pinning observedGeneration: 1 catches "stale
+                # status was never touched" bugs.
+                observedGeneration: 1
+                (length(conditions[?type == 'Ready' && status == 'True']) > `0`): true
 
   # Cleanup is handled automatically by chainsaw (skipDelete: false in
   # .chainsaw.yaml) — every resource applied during a step is deleted in

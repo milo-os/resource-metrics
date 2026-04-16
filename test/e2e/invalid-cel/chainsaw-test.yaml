@@ -50,8 +50,10 @@ spec:
     - name: apply the broken policy and assert InvalidCEL
       try:
         - apply:
+            cluster: milo
             file: policy.yaml
         - assert:
+            cluster: milo
             timeout: 30s
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
@@ -63,7 +65,7 @@ spec:
                 # to compile, activeGenerators is implicitly 0 (the field
                 # is omitempty) and compilationFailures is 1.
                 compilationFailures: 1
-                (activeGenerators == null || activeGenerators == 0): true
+                (activeGenerators == null || activeGenerators == `0`): true
                 (length(conditions[?type == 'InvalidCEL' && status == 'True']) > `0`): true
 
   # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

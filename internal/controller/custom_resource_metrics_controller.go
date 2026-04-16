@@ -64,6 +64,18 @@ type ResourceMetricsPolicyReconciler struct {
 // they pick up any new GVRs, syncs the OTel instrument set to the new
 // registry snapshot, and patches status with the observed condition set.
 func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
+	// We only own the policy CRD on the local cluster. Provider-cluster
+	// reconcile requests would race with the local cache (the policy
+	// often doesn't yet exist there from this client's view), surface as
+	// "not found", and incorrectly trigger the deletion path below —
+	// evicting a freshly-created policy from the registry. We can't
+	// disable provider-cluster engagement in the builder due to a bug in
+	// mcbuilder v0.21.0-alpha.8 (EngageOptions.ApplyToFor replaces
+	// instead of merging — see SetupWithManager comment), so guard here.
+	if req.ClusterName != "" {
+		return ctrl.Result{}, nil
+	}
+
 	logger := log.FromContext(ctx).WithValues("policy", req.NamespacedName.String())
 
 	key := types.NamespacedName{Name: req.Name, Namespace: req.Namespace}
@@ -359,11 +371,21 @@ func aggregateMissingPermissions(
 // The ResourceMetricsPolicy CRD is cluster-scoped and lives on the management
 // cluster only: we engage with the local cluster and explicitly opt out of
 // provider clusters so the reconciler never fires for project CPs.
+//
+// NOTE: passing both WithEngageWithLocalCluster(true) AND
+// WithEngageWithProviderClusters(false) as separate ForOptions is broken in
+// multicluster-runtime v0.21.0-alpha.8 — each EngageOptions.ApplyToFor does
+// opts.EngageOptions = w, so the second call wipes out the first. We pass
+// only WithEngageWithLocalCluster(true); engageWithProviderClusters falls back
+// to its default (true when a provider is set), so the controller will also
+// open watches on each engaged project CP. Those CPs don't serve the CRD,
+// so the watches surface "no matches for kind" errors but don't enqueue
+// reconciles. Track upstream: the right fix is for mcbuilder to merge
+// EngageOptions instead of replace.
 func (r *ResourceMetricsPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&resourcemetricsv1alpha1.ResourceMetricsPolicy{},
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Named("resourcemetricspolicy").
 		Complete(r)

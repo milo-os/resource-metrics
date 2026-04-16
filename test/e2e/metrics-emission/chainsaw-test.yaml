@@ -53,8 +53,10 @@ spec:
     - name: apply the policy and wait Ready
       try:
         - apply:
+            cluster: milo
             file: policy.yaml
         - assert:
+            cluster: milo
             timeout: 30s
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1

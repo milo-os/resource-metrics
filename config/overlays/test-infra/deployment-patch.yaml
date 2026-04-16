@@ -22,10 +22,28 @@ spec:
       containers:
         - name: manager
           imagePullPolicy: IfNotPresent
+          # Point ctrl.GetConfigOrDie() (used to build the local cluster
+          # passed to mcmanager.New) at the milo apiserver. The kind
+          # apiserver is just the pod host — the controller's actual
+          # control plane (CRD, ResourceMetricsPolicy resources, leader
+          # lease, …) lives on milo. Without this, ctrl.GetConfigOrDie()
+          # falls back to the in-cluster ServiceAccount, which targets
+          # the kind apiserver — so the policy watch sets up against the
+          # wrong cluster and never receives events.
+          env:
+            - name: KUBECONFIG
+              value: /etc/milo/kubeconfig
           args:
-            - --leader-elect
+            # --leader-elect intentionally omitted: a single replica
+            # doesn't need it, and the lease would otherwise need a
+            # namespace on milo (controller-runtime defaults to the
+            # pod's k8s namespace, which doesn't exist on milo).
             - --health-probe-bind-address=:8081
             - --server-config=/etc/resource-metrics/server.yaml
+            # Verbose multicluster + controller-runtime logging — useful
+            # while diagnosing why the policy informer isn't delivering
+            # events. Drop back to default once stable.
+            - --zap-log-level=debug
           volumeMounts:
             # Re-mount the base `service-config` volume at
             # /etc/resource-metrics so the --server-config path matches.
