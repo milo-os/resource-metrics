@@ -197,16 +197,23 @@ tasks:
           sleep 30
         done
 
+  test:install-crds:
+    desc: Install resource-metrics CRDs on the milo control plane.
+    silent: true
+    cmds:
+      - |
+        set -e
+        echo "Installing ResourceMetricsPolicy CRD on milo control plane..."
+        kubectl --kubeconfig "{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig" apply -f config/crd/bases
+        # Wait for the CRD to be established so the controller's API
+        # discovery sees it at startup.
+        kubectl --kubeconfig "{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig" wait --for=condition=Established \
+          crd/resourcemetricspolicies.resourcemetrics.miloapis.com --timeout=30s
+
   test:deploy:
     desc: Deploy resource-metrics via the test-infra overlay.
     silent: true
     cmds:
-      # Install our CRD on milo BEFORE the controller pod starts. The
-      # controller's local manager (KUBECONFIG=/etc/milo/kubeconfig)
-      # does API discovery at startup; if the CRD isn't present yet,
-      # the informer setup fails with "no matches for kind" and the
-      # watch never delivers events for ResourceMetricsPolicy.
-      - kubectl --kubeconfig "{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig" apply -f config/crd/bases
       # Apply the full overlay (Deployment, ServiceAccount, milo-kubeconfig
       # Secret, ConfigMap, …) to the kind cluster — kind is the pod host.
       - task test-infra:kubectl -- apply -k config/overlays/test-infra
@@ -271,9 +278,10 @@ tasks:
       - task: test:install-dependencies
       - task: dev:build
       - task: dev:load
-      # milo-kubeconfig MUST be generated before test:deploy, since
-      # test:deploy uses it to apply the CRD on milo.
+      # milo-kubeconfig MUST be generated before test:install-crds,
+      # which applies the CRD on milo before the controller starts.
       - task: test:milo-kubeconfig
+      - task: test:install-crds
       - task: test:deploy
 
   e2e:
