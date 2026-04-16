@@ -132,17 +132,17 @@ func NewProjectCollector(cl cluster.Cluster, clusterName string, registry *polic
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, defaultResyncPeriod)
 
 	return &ProjectCollector{
-		clusterName:   clusterName,
-		dynamicClient: dynClient,
-		restMapper:    cl.GetRESTMapper(),
-		factory:       factory,
-		authzClient:   authz,
+		clusterName:      clusterName,
+		dynamicClient:    dynClient,
+		restMapper:       cl.GetRESTMapper(),
+		factory:          factory,
+		authzClient:      authz,
 		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
 		startedInformers: make(map[schema.GroupVersionResource]struct{}),
 		registry:         registry,
 		wake:             make(chan struct{}, 1),
-		logger:        logger.WithValues("cluster", clusterName),
-		stopped:       make(chan struct{}),
+		logger:           logger.WithValues("cluster", clusterName),
+		stopped:          make(chan struct{}),
 	}, nil
 }
 
@@ -158,16 +158,16 @@ func newProjectCollectorForTesting(
 	logger logr.Logger,
 ) *ProjectCollector {
 	return &ProjectCollector{
-		clusterName:   clusterName,
-		dynamicClient: dynClient,
-		factory:       factory,
-		authzClient:   authz,
+		clusterName:      clusterName,
+		dynamicClient:    dynClient,
+		factory:          factory,
+		authzClient:      authz,
 		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
 		startedInformers: make(map[schema.GroupVersionResource]struct{}),
 		registry:         registry,
 		wake:             make(chan struct{}, 1),
-		logger:        logger.WithValues("cluster", clusterName),
-		stopped:       make(chan struct{}),
+		logger:           logger.WithValues("cluster", clusterName),
+		stopped:          make(chan struct{}),
 	}
 }
 

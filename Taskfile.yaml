@@ -155,6 +155,22 @@ tasks:
           task test-infra:kubectl -- -n milo-system describe helmrelease --all >&2 || true
           exit 1
         fi
+      # cert-manager's cainjector ships with a 64Mi memory limit that
+      # OOMs on a cluster with many webhook consumers (milo + OTel
+      # Operator + friends). Without cainjector, caBundles on
+      # ValidatingWebhookConfiguration/MutatingWebhookConfiguration
+      # stay empty, so admission webhooks fail with "x509: certificate
+      # signed by unknown authority". Symptom: install-otel-collector
+      # retry loop eventually exhausts. Bump to 256Mi BEFORE installing
+      # OTel Collector so cainjector can keep up with the webhook
+      # churn. Fix upstream in test-infra's cert-manager HelmRelease
+      # values eventually.
+      - |
+        set -e
+        echo "Bumping cert-manager-cainjector memory limit to 256Mi..."
+        task test-infra:kubectl -- -n cert-manager patch deployment cert-manager-cainjector --type=json \
+          -p='[{"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"256Mi"}]'
+        task test-infra:kubectl -- -n cert-manager rollout status deployment/cert-manager-cainjector --timeout=90s
       # Install only the observability components we need for the e2e
       # suite: VictoriaMetrics (target for OTLP remote-write) and the
       # OpenTelemetry Collector (OTLP receiver). Grafana/Loki/Tempo are
