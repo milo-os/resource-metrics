@@ -201,17 +201,15 @@ tasks:
     desc: Deploy resource-metrics via the test-infra overlay.
     silent: true
     cmds:
+      # Install our CRD on milo BEFORE the controller pod starts. The
+      # controller's local manager (KUBECONFIG=/etc/milo/kubeconfig)
+      # does API discovery at startup; if the CRD isn't present yet,
+      # the informer setup fails with "no matches for kind" and the
+      # watch never delivers events for ResourceMetricsPolicy.
+      - kubectl --kubeconfig "{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig" apply -f config/crd/bases
       # Apply the full overlay (Deployment, ServiceAccount, milo-kubeconfig
       # Secret, ConfigMap, …) to the kind cluster — kind is the pod host.
       - task test-infra:kubectl -- apply -k config/overlays/test-infra
-      # Install our CRD on milo. The controller's local manager points at
-      # milo (KUBECONFIG=/etc/milo/kubeconfig in the deployment patch), so
-      # the ResourceMetricsPolicy watch source is set up against milo —
-      # the CRD must exist there for the watch to deliver events.
-      # We use the same milo kubeconfig the controller uses; the
-      # test-admin-token grants system:masters so kubectl apply works
-      # without any extra RBAC on milo.
-      - kubectl --kubeconfig "{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig" apply -f config/crd/bases
       - task test-infra:kubectl -- -n resource-metrics-system rollout status deployment/resource-metrics-controller-manager --timeout=180s
 
   test:milo-kubeconfig:
