@@ -261,6 +261,8 @@ func (c *ProjectCollector) reconcile() {
 			toAdd = append(toAdd, gvr)
 		}
 	}
+	if len(toAdd) > 0 || len(toRemove) > 0 {
+	}
 	for gvr := range present {
 		if _, ok := desired[gvr]; !ok {
 			toRemove = append(toRemove, gvr)
@@ -331,6 +333,17 @@ func (c *ProjectCollector) startInformer(parent context.Context, gvr schema.Grou
 		return &gvrInformer{denied: true, lastErr: errors.New("ssar: list or watch not allowed"), cancel: noopCancel}
 	}
 
+	// Fast pre-check: if the GVR doesn't exist on the cluster at all,
+	// fail immediately instead of blocking cacheSyncTimeout seconds
+	// waiting for the reflector to give up. probeList does a single
+	// LIST with limit=1; on a kind cluster this returns 404 in <10ms
+	// for non-existent resources.
+	if probeErr := c.probeList(parent, gvr); isNotFoundOrForbidden(probeErr) {
+		log.Info("probe list detected unavailable GVR; recording denial without waiting for sync")
+		controllermetrics.RBACDeniedTotal.WithLabelValues(c.clusterName, gvr.String()).Inc()
+		return &gvrInformer{denied: true, lastErr: probeErr, cancel: noopCancel}
+	}
+
 	generic := c.factory.ForResource(gvr)
 	informer := generic.Informer()
 
@@ -348,16 +361,18 @@ func (c *ProjectCollector) startInformer(parent context.Context, gvr schema.Grou
 	}
 	c.mu.Unlock()
 	if !alreadyStarted {
-		// First time we've seen this GVR on this collector: launch the
-		// informer goroutine, driven by the collector's lifetime context
-		// (parent of runCtx) so it survives reconcile-driven entry churn.
+		log.V(1).Info("starting informer goroutine")
 		go informer.Run(c.ctx.Done())
+	} else {
+		log.V(1).Info("reusing running informer")
 	}
 
 	// Wait for the cache to sync, bounded by cacheSyncTimeout.
 	syncCtx, syncCancel := context.WithTimeout(runCtx, cacheSyncTimeout)
 	defer syncCancel()
+	log.V(1).Info("waiting for cache sync")
 	synced := cache.WaitForCacheSync(syncCtx.Done(), informer.HasSynced)
+	log.V(1).Info("cache sync done", "synced", synced)
 
 	if !synced {
 		err := syncCtx.Err()
