@@ -107,7 +107,7 @@ spec:
               until [ "$attempt" -ge 18 ]; do
                 attempt=$((attempt+1))
                 echo "attempt $attempt: querying VM for $query"
-                out=$(kubectl run e2e-vmquery-$RANDOM \
+                out=$(kubectl run e2e-vmquery-$attempt \
                         --rm -i --restart=Never --quiet \
                         --image=curlimages/curl:8.10.1 \
                         --timeout=20s \

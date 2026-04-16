@@ -76,8 +76,8 @@ spec:
             file: policy.yaml
         - assert:
             cluster: milo
-            # Allow time for SSAR preflight loop + status patch.
-            timeout: 60s
+            # Allow time: ~30s cache-sync timeout + 10s requeue + margin.
+            timeout: 90s
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
               kind: ResourceMetricsPolicy
