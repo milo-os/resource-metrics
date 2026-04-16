@@ -45,8 +45,7 @@ type GeneratorSpec struct {
 // ResourceReference identifies a Kubernetes API resource by group, version, and plural name.
 type ResourceReference struct {
 	// Group is the API group of the resource (e.g. "compute.miloapis.com").
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
+	// Empty string targets core resources (configmaps, pods, namespaces, …).
 	Group string `json:"group"`
 	// Version is the API version (e.g. "v1alpha1").
 	// +kubebuilder:validation:Required
@@ -110,8 +109,7 @@ type LabelSpec struct {
 // GVRRef identifies a Kubernetes API resource by group, version, and plural name.
 type GVRRef struct {
 	// Group is the API group of the resource.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
+	// Empty string targets core resources (configmaps, pods, namespaces, …).
 	Group string `json:"group"`
 	// Version is the API version.
 	// +kubebuilder:validation:Required

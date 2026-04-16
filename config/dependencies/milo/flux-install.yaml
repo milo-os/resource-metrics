@@ -10,6 +10,13 @@ spec:
   prune: true
   wait: true
   targetNamespace: milo-system
+  # Ensure the ProjectControlPlane CRD (installed by milo-infra-crds) is
+  # present before this Kustomization starts — otherwise the milo overlay
+  # comes up first and milo-controller-manager crash-loops on missing CRD.
+  # Remove this dependency along with flux-install-infra-crds.yaml once
+  # milo's test-infra overlay ships the infrastructure CRDs directly.
+  dependsOn:
+    - name: milo-infra-crds
   sourceRef:
     kind: OCIRepository
     name: milo

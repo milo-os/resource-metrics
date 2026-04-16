@@ -22,24 +22,25 @@ spec:
     - name: prerequisites (org, project, project-cp kubeconfig)
       try:
         - apply:
+            cluster: milo
             file: ../fixtures/organization.yaml
         - apply:
+            cluster: milo
             file: ../fixtures/project.yaml
         - assert:
+            cluster: milo
             timeout: 120s
             resource:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
               kind: Project
               metadata:
                 name: e2e-alpha
-              status:
-                (conditions[?type == 'Ready'])[0]:
-                  status: "True"
+              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
         - script:
             timeout: 30s
             content: |
               set -euo pipefail
-              src="${KUBECONFIG:-$HOME/.kube/config}"
+              src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
               base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
               new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
               kubectl --kubeconfig "$src" config view --raw --flatten \
@@ -81,8 +82,7 @@ spec:
               metadata:
                 name: e2e-rbac-denied
               status:
-                (conditions[?type == 'PermissionDenied'])[0]:
-                  status: "True"
+                (length(conditions[?type == 'PermissionDenied' && status == 'True']) > `0`): true
                 (length(missingPermissions) > `0`): true
                 # At least one of the missing GVRs must be the one we
                 # targeted — guards against the controller reporting

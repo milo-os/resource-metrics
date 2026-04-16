@@ -128,9 +128,9 @@ spec:
                         to monitor.
                       properties:
                         group:
-                          description: Group is the API group of the resource (e.g.
-                            "compute.miloapis.com").
-                          minLength: 1
+                          description: |-
+                            Group is the API group of the resource (e.g. "compute.miloapis.com").
+                            Empty string targets core resources (configmaps, pods, namespaces, …).
                           type: string
                         resource:
                           description: Resource is the plural resource name (e.g.
@@ -254,8 +254,9 @@ spec:
                     version, and plural name.
                   properties:
                     group:
-                      description: Group is the API group of the resource.
-                      minLength: 1
+                      description: |-
+                        Group is the API group of the resource.
+                        Empty string targets core resources (configmaps, pods, namespaces, …).
                       type: string
                     resource:
                       description: Resource is the plural resource name.

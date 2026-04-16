@@ -23,19 +23,20 @@ spec:
     - name: apply org + project on management cluster
       try:
         - apply:
+            cluster: milo
             file: ../fixtures/organization.yaml
         - apply:
+            cluster: milo
             file: ../fixtures/project.yaml
         - assert:
+            cluster: milo
             timeout: 120s
             resource:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
               kind: Project
               metadata:
                 name: e2e-alpha
-              status:
-                (conditions[?type == 'Ready'])[0]:
-                  status: "True"
+              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
 
     - name: setup project-cp kubeconfig
       try:
@@ -49,7 +50,7 @@ spec:
               # route through the milo aggregation path for project
               # e2e-alpha. All credentials, CAs, and proxy settings carry
               # over from the source kubeconfig unchanged.
-              src="${KUBECONFIG:-$HOME/.kube/config}"
+              src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
               if [ ! -f "$src" ]; then
                 echo "source kubeconfig not found at $src" >&2
                 exit 1
@@ -105,10 +106,8 @@ spec:
                 name: e2e-lifecycle
               status:
                 activeGenerators: 1
-                (conditions[?type == 'Ready'])[0]:
-                  status: "True"
-                  observedGeneration: 1
-                (observedGeneration == 1): true
+                (length(conditions[?type == 'Ready' && status == 'True' && observedGeneration == `1`]) > `0`): true
+                (observedGeneration == `1`): true
 
     - name: delete the policy and confirm it is gone
       try:
@@ -137,8 +136,7 @@ spec:
                 name: e2e-lifecycle
               status:
                 activeGenerators: 1
-                (conditions[?type == 'Ready'])[0]:
-                  status: "True"
+                (length(conditions[?type == 'Ready' && status == 'True']) > `0`): true
                 # After recreation the object has generation 1 again and
                 # the controller must have updated observedGeneration to
                 # match. Asserting equality without pinning to a value

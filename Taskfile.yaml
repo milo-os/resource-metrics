@@ -255,21 +255,28 @@ tasks:
     silent: true
     deps: [install-tools]
     cmds:
-      # KUBECONFIG points at the milo-targeted kubeconfig because the
-      # chainsaw fixtures apply resourcemanager.miloapis.com resources
-      # (Organization, Project, …) that only exist on milo-apiserver.
-      # The chainsaw setup steps that derive a per-project kubeconfig
-      # via `sed` on the server URL still work — the rewritten URL
-      # appends the project-CP path prefix that milo recognizes on the
-      # same gateway endpoint.
+      # KUBECONFIG is the kind kubeconfig (default cluster) because the
+      # controller and our resourcemetrics.miloapis.com CRD live on kind.
+      # The milo kubeconfig is registered as a named chainsaw cluster
+      # ("milo") so fixtures that apply resourcemanager.miloapis.com
+      # resources (Organization, Project, …) can target it explicitly.
+      # MILO_KUBECONFIG is exported so chainsaw setup scripts that derive
+      # a per-project kubeconfig via `sed` on the server URL can read
+      # the milo kubeconfig directly — the rewritten URL appends the
+      # project-CP path prefix that milo recognizes on the same gateway
+      # endpoint.
       - |
         set -e
-        export KUBECONFIG="{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig"
-        if [ ! -f "${KUBECONFIG}" ]; then
-          echo "ERROR: ${KUBECONFIG} not found. Run 'task test:setup' (or 'task test:milo-kubeconfig') first." >&2
+        export KUBECONFIG="{{.USER_WORKING_DIR}}/.test-infra/kubeconfig"
+        milo_kubeconfig="{{.USER_WORKING_DIR}}/.test-infra/milo-kubeconfig"
+        export MILO_KUBECONFIG="${milo_kubeconfig}"
+        if [ ! -f "${KUBECONFIG}" ] || [ ! -f "${milo_kubeconfig}" ]; then
+          echo "ERROR: kubeconfigs missing. Run 'task test:setup' first." >&2
           exit 1
         fi
-        {{.TOOL_DIR}}/chainsaw test test/e2e --config test/e2e/.chainsaw.yaml
+        {{.TOOL_DIR}}/chainsaw test test/e2e \
+          --cluster milo=${milo_kubeconfig} \
+          --config test/e2e/.chainsaw.yaml
 
   test:teardown:
     desc: Tear down the kind cluster created by test:setup.

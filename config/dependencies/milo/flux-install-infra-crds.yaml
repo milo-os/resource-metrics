@@ -1,0 +1,35 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: milo-infra-crds
+  namespace: flux-system
+# Workaround: milo's overlays/test-infra (applied by the sibling `milo`
+# Kustomization) does NOT install the ProjectControlPlane CRD
+# (config/crd/bases/infrastructure/), but milo-controller-manager runs
+# with --control-plane-scope=core and watches ProjectControlPlane on
+# the infra cluster. Without this CRD installed, milo's project
+# reconciler loops on "no matches for kind ProjectControlPlane", the
+# Project never gets a Ready condition, and downstream consumers
+# (e.g. our chainsaw suite) time out waiting for status.
+#
+# We install the CRD separately from the same OCI bundle so we always
+# track the version shipped with the milo tag pinned in
+# ocirepository.yaml. Remove this file once milo's test-infra overlay
+# includes infrastructure-group CRDs (or the controller-manager is
+# reconfigured to not require them).
+spec:
+  interval: 10m
+  retryInterval: 1m
+  timeout: 2m
+  prune: true
+  wait: true
+  sourceRef:
+    kind: OCIRepository
+    name: milo
+  # The milo-kustomize OCI bundle has the config tree flattened — what
+  # lives at config/crd/bases/infrastructure in the milo source repo is
+  # at crd/bases/infrastructure inside the published bundle.
+  path: crd/bases/infrastructure
+  # Apply before the main `milo` Kustomization so the controller-manager
+  # has the CRD available the moment it starts.
+  dependsOn: []

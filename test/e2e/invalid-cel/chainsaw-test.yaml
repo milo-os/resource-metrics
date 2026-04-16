@@ -19,24 +19,25 @@ spec:
     - name: prerequisites (org, project, project-cp kubeconfig, aggregation)
       try:
         - apply:
+            cluster: milo
             file: ../fixtures/organization.yaml
         - apply:
+            cluster: milo
             file: ../fixtures/project.yaml
         - assert:
+            cluster: milo
             timeout: 120s
             resource:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
               kind: Project
               metadata:
                 name: e2e-alpha
-              status:
-                (conditions[?type == 'Ready'])[0]:
-                  status: "True"
+              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
         - script:
             timeout: 30s
             content: |
               set -euo pipefail
-              src="${KUBECONFIG:-$HOME/.kube/config}"
+              src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
               base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
               new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
               kubectl --kubeconfig "$src" config view --raw --flatten \
@@ -63,7 +64,6 @@ spec:
                 # is omitempty) and compilationFailures is 1.
                 compilationFailures: 1
                 (activeGenerators == null || activeGenerators == 0): true
-                (conditions[?type == 'InvalidCEL'])[0]:
-                  status: "True"
+                (length(conditions[?type == 'InvalidCEL' && status == 'True']) > `0`): true
 
   # Auto-cleanup via skipDelete: false in .chainsaw.yaml.
