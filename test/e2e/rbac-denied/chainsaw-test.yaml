@@ -35,7 +35,7 @@ spec:
               kind: Project
               metadata:
                 name: e2e-alpha
-              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
+              (length((status.conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
         - script:
             timeout: 30s
             content: |
@@ -84,7 +84,7 @@ spec:
               metadata:
                 name: e2e-rbac-denied
               status:
-                (length(conditions[?type == 'PermissionDenied' && status == 'True']) > `0`): true
+                (length((conditions || `[]`)[?type == 'PermissionDenied' && status == 'True']) > `0`): true
                 # At least one of the missing GVRs must be the one we
                 # targeted — guards against the controller reporting
                 # missing permissions for some unrelated kind. The

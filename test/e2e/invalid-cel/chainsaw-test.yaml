@@ -32,7 +32,7 @@ spec:
               kind: Project
               metadata:
                 name: e2e-alpha
-              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
+              (length((status.conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
         - script:
             timeout: 30s
             content: |
@@ -66,6 +66,6 @@ spec:
                 # is omitempty) and compilationFailures is 1.
                 compilationFailures: 1
                 (activeGenerators == null || activeGenerators == `0`): true
-                (length(conditions[?type == 'InvalidCEL' && status == 'True']) > `0`): true
+                (length((conditions || `[]`)[?type == 'InvalidCEL' && status == 'True']) > `0`): true
 
   # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

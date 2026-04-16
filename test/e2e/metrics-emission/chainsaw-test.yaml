@@ -35,7 +35,7 @@ spec:
               kind: Project
               metadata:
                 name: e2e-alpha
-              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
+              (length((status.conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
         - script:
             timeout: 30s
             content: |
@@ -65,7 +65,7 @@ spec:
                 name: e2e-metrics-emission
               status:
                 activeGenerators: 1
-                (length(conditions[?type == 'Ready' && status == 'True']) > `0`): true
+                (length((conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
 
     - name: create a marker ConfigMap on the project CP
       try:

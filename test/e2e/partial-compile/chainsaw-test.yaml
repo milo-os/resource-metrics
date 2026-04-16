@@ -29,7 +29,7 @@ spec:
               kind: Project
               metadata:
                 name: e2e-alpha
-              (length(status.conditions[?type == 'Ready' && status == 'True']) > `0`): true
+              (length((status.conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
         - script:
             timeout: 30s
             content: |
@@ -60,9 +60,9 @@ spec:
               status:
                 activeGenerators: 1
                 compilationFailures: 1
-                (length(conditions[?type == 'InvalidCEL' && status == 'True']) > `0`): true
-                (length(conditions[?type == 'Degraded' && status == 'True']) > `0`): true
+                (length((conditions || `[]`)[?type == 'InvalidCEL' && status == 'True']) > `0`): true
+                (length((conditions || `[]`)[?type == 'Degraded' && status == 'True']) > `0`): true
                 # A partially-compiled policy must NOT be reported Ready.
-                (length(conditions[?type == 'Ready' && status == 'False']) > `0`): true
+                (length((conditions || `[]`)[?type == 'Ready' && status == 'False']) > `0`): true
 
   # Auto-cleanup via skipDelete: false in .chainsaw.yaml.
