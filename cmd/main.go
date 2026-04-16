@@ -189,7 +189,16 @@ func main() {
 	}
 
 	if err = (&controller.ResourceMetricsPolicyReconciler{
-		Client:         deploymentCluster.GetClient(),
+		// Use mgr's local-cluster client (same cache the mcbuilder
+		// watch source feeds from). Using a separate cluster.Cluster
+		// instance built from the same kubeconfig — what we did before
+		// — gives the reconciler its OWN cache, distinct from the
+		// watch's cache. Their sync states differ, so watch events
+		// arrive faster than the reconciler-side cache catches up:
+		// r.Get returns NotFound for a freshly-created policy, the
+		// reconciler treats it as a delete, and evicts the registry
+		// entry the next reconcile then has to recreate.
+		Client:         mgr.GetLocalManager().GetClient(),
 		Scheme:         scheme,
 		Env:            celEnv,
 		Registry:       registry,

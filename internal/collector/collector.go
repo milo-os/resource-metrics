@@ -83,6 +83,17 @@ type ProjectCollector struct {
 
 	mu        sync.RWMutex
 	informers map[schema.GroupVersionResource]*gvrInformer
+	// startedInformers tracks GVRs whose underlying SharedIndexInformer
+	// has already been started via informer.Run(). The dynamic factory
+	// returns the SAME SharedIndexInformer instance for repeated
+	// ForResource calls on the same GVR; calling Run() on it twice is a
+	// no-op and emits "sharedIndexInformer has started, run more than
+	// once is not allowed". Once started, the informer runs for the
+	// lifetime of the collector — we do NOT stop it when policies stop
+	// referencing the GVR (the informer is shared across reconciles and
+	// can't be re-Run after a stop). This is bounded by the universe of
+	// GVRs ever requested on this project, which is small.
+	startedInformers map[schema.GroupVersionResource]struct{}
 
 	registry *policy.Registry
 	wake     chan struct{}
@@ -126,9 +137,10 @@ func NewProjectCollector(cl cluster.Cluster, clusterName string, registry *polic
 		restMapper:    cl.GetRESTMapper(),
 		factory:       factory,
 		authzClient:   authz,
-		informers:     make(map[schema.GroupVersionResource]*gvrInformer),
-		registry:      registry,
-		wake:          make(chan struct{}, 1),
+		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
+		startedInformers: make(map[schema.GroupVersionResource]struct{}),
+		registry:         registry,
+		wake:             make(chan struct{}, 1),
 		logger:        logger.WithValues("cluster", clusterName),
 		stopped:       make(chan struct{}),
 	}, nil
@@ -150,9 +162,10 @@ func newProjectCollectorForTesting(
 		dynamicClient: dynClient,
 		factory:       factory,
 		authzClient:   authz,
-		informers:     make(map[schema.GroupVersionResource]*gvrInformer),
-		registry:      registry,
-		wake:          make(chan struct{}, 1),
+		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
+		startedInformers: make(map[schema.GroupVersionResource]struct{}),
+		registry:         registry,
+		wake:             make(chan struct{}, 1),
 		logger:        logger.WithValues("cluster", clusterName),
 		stopped:       make(chan struct{}),
 	}
@@ -321,10 +334,25 @@ func (c *ProjectCollector) startInformer(parent context.Context, gvr schema.Grou
 	generic := c.factory.ForResource(gvr)
 	informer := generic.Informer()
 
+	// Track per-attempt context separately from the informer's lifecycle.
+	// The informer itself is started ONCE per (collector, GVR); subsequent
+	// reconciles re-use the existing informer. We can't actually stop a
+	// SharedIndexInformer and restart it later, so cancellation only
+	// gates this particular startInformer attempt's cache-sync wait.
 	runCtx, cancel := context.WithCancel(parent)
 
-	// Run the informer on its own goroutine driven by runCtx.
-	go informer.Run(runCtx.Done())
+	c.mu.Lock()
+	_, alreadyStarted := c.startedInformers[gvr]
+	if !alreadyStarted {
+		c.startedInformers[gvr] = struct{}{}
+	}
+	c.mu.Unlock()
+	if !alreadyStarted {
+		// First time we've seen this GVR on this collector: launch the
+		// informer goroutine, driven by the collector's lifetime context
+		// (parent of runCtx) so it survives reconcile-driven entry churn.
+		go informer.Run(c.ctx.Done())
+	}
 
 	// Wait for the cache to sync, bounded by cacheSyncTimeout.
 	syncCtx, syncCancel := context.WithTimeout(runCtx, cacheSyncTimeout)
@@ -337,16 +365,34 @@ func (c *ProjectCollector) startInformer(parent context.Context, gvr schema.Grou
 			err = errors.New("cache: failed to sync")
 		}
 		// Classify the failure: if a direct list says NotFound/Forbidden,
-		// count an RBAC denial. Either way we tear down the informer and
-		// drop the entry so we don't leak a goroutine across reconciles.
-		denied := isNotFoundOrForbidden(c.probeList(parent, gvr))
+		// the GVR isn't available to us (CRD missing or RBAC denied at
+		// the apiserver level past SSAR — e.g. milo's per-project
+		// authorization that admin tokens still bypass for SSAR). Treat
+		// both as a "denial" so the policy reconciler surfaces it via
+		// missingPermissions; otherwise the controller would silently
+		// retry forever and the user would have no signal that the
+		// generator is non-functional.
+		probeErr := c.probeList(parent, gvr)
+		denied := isNotFoundOrForbidden(probeErr)
+		log.Info("informer cache sync failed", "error", err.Error(), "denied", denied)
+		// Always tear down the informer goroutine — even when we record
+		// the entry — so it doesn't linger or double-run on the next
+		// reconcile.
+		cancel()
 		if denied {
 			controllermetrics.RBACDeniedTotal.WithLabelValues(c.clusterName, gvr.String()).Inc()
+			// Record the denied entry so the policy reconciler picks it
+			// up in missingPermissions. Subsequent reconciles will
+			// re-evaluate and start the informer if the GVR appears
+			// (e.g. CRD installed later).
+			lastErr := probeErr
+			if lastErr == nil {
+				lastErr = err
+			}
+			return &gvrInformer{denied: true, lastErr: lastErr, cancel: noopCancel}
 		}
-		log.Info("informer cache sync failed; cancelling and dropping entry", "error", err.Error(), "denied", denied)
-		// Cancel the informer goroutine so it doesn't linger in the map —
-		// or outside it. The next reconcile will re-attempt.
-		cancel()
+		// Transient sync failure (e.g. apiserver flake) — drop the
+		// entry so the next reconcile re-attempts.
 		return nil
 	}
 

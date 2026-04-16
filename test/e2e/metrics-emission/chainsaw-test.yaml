@@ -94,7 +94,13 @@ spec:
               # Run curl from inside the cluster so we can hit the VM
               # service DNS directly. `kubectl run --rm -i --restart=Never`
               # gives us a one-shot container whose stdout we capture.
-              query='datum_configmap_info{name="e2e-marker",project="e2e-alpha"}'
+              # Resource-attributes injected by the OTel runtime get the
+              # datum_ prefix and surface as label keys on the
+              # remote-write series; the project label is "datum_project"
+              # rather than "project". The value is the cluster key the
+              # multicluster provider assigns ("/<project-name>" for
+              # cluster-scoped projects on milo).
+              query='datum_configmap_info{name="e2e-marker",datum_project="/e2e-alpha"}'
               vm_url='http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query'
 
               attempt=0

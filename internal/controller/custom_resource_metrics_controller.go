@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -64,6 +65,9 @@ type ResourceMetricsPolicyReconciler struct {
 // they pick up any new GVRs, syncs the OTel instrument set to the new
 // registry snapshot, and patches status with the observed condition set.
 func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx).WithValues("policy", req.NamespacedName.String(), "cluster", req.ClusterName)
+	logger.V(1).Info("reconcile invoked")
+
 	// We only own the policy CRD on the local cluster. Provider-cluster
 	// reconcile requests would race with the local cache (the policy
 	// often doesn't yet exist there from this client's view), surface as
@@ -73,10 +77,9 @@ func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcr
 	// mcbuilder v0.21.0-alpha.8 (EngageOptions.ApplyToFor replaces
 	// instead of merging — see SetupWithManager comment), so guard here.
 	if req.ClusterName != "" {
+		logger.Info("ignoring reconcile for non-local cluster")
 		return ctrl.Result{}, nil
 	}
-
-	logger := log.FromContext(ctx).WithValues("policy", req.NamespacedName.String())
 
 	key := types.NamespacedName{Name: req.Name, Namespace: req.Namespace}
 
@@ -192,17 +195,29 @@ func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcr
 		Message:            messageForReady(readyTrue, activeGenerators),
 	})
 
-	// Short-circuit if the status is identical: no patch means no spurious
-	// resource-version bump.
+	// Periodic requeue so the reconciler picks up async collector state
+	// changes — most importantly, GVR denials (informer cache-sync
+	// failures) recorded by ProjectCollector after the initial reconcile
+	// returns. Without this, status.missingPermissions would stay empty
+	// until the next policy mutation. The cache-sync timeout is ~30s,
+	// so 10s gives us a couple of polls inside chainsaw's typical 60s
+	// PermissionDenied assertion window without flooding the apiserver.
+	// TODO: replace with an explicit wake channel from the collector so
+	// the reconciler runs immediately after a denial is recorded.
+	const requeue = 10 * time.Second
+
+	// Short-circuit the patch if the status is identical (no spurious
+	// resource-version bump), but still requeue for later collector
+	// state changes.
 	if reflect.DeepEqual(obj.Status, desired.Status) {
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
 
 	if err := r.Status().Patch(ctx, desired, client.MergeFrom(&obj)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch status: %w", err)
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // setCondition is a thin wrapper so the call sites in Reconcile stay compact.
