@@ -39,7 +39,7 @@ spec:
         - script:
             timeout: 30s
             content: |
-              set -euo pipefail
+              set -eu
               src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
               base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
               new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
@@ -89,7 +89,7 @@ spec:
             # OTLP push -> collector remote-write -> VM ingest visibility.
             timeout: 120s
             content: |
-              set -euo pipefail
+              set -eu
 
               # Run curl from inside the cluster so we can hit the VM
               # service DNS directly. `kubectl run --rm -i --restart=Never`

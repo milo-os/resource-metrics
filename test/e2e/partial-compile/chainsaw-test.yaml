@@ -33,7 +33,7 @@ spec:
         - script:
             timeout: 30s
             content: |
-              set -euo pipefail
+              set -eu
               src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
               base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
               new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"

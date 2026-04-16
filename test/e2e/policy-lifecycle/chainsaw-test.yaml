@@ -43,7 +43,7 @@ spec:
         - script:
             timeout: 30s
             content: |
-              set -euo pipefail
+              set -eu
 
               # Derive a project-scoped kubeconfig from whichever one is
               # already in use. We rewrite the cluster's `server` URL to
