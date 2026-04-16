@@ -273,8 +273,10 @@ tasks:
       - task: test:install-dependencies
       - task: dev:build
       - task: dev:load
-      - task: test:deploy
+      # milo-kubeconfig MUST be generated before test:deploy, since
+      # test:deploy uses it to apply the CRD on milo.
       - task: test:milo-kubeconfig
+      - task: test:deploy
 
   e2e:
     desc: Run chainsaw e2e tests against test/e2e.
