@@ -7,6 +7,9 @@ spec:
     spec:
       containers:
         - name: manager
+          env:
+            - name: KUBECONFIG
+              value: /etc/milo/kubeconfig
           volumeMounts:
             - mountPath: /etc/milo/pki/trust
               name: datum-control-plane-trust-bundle
