@@ -1,0 +1,15 @@
+# Placeholder service-config consumed by config/manager/kustomization.yaml's
+# configMapGenerator. Overlays are expected to override this ConfigMap with
+# behavior: replace (see config/overlays/test-infra/kustomization.yaml).
+# Leaving a minimal single-cluster default here so that `config/default`
+# renders cleanly without an overlay.
+apiVersion: apiserver.config.miloapis.com/v1alpha1
+kind: ResourceMetricsOperator
+discovery:
+  mode: single
+  internalServiceDiscovery: false
+otel:
+  endpoint: otel-collector-collector.otel-collector-system:4317
+  insecure: true
+  collectionInterval: 30s
+  defaultMetricPrefix: datum_

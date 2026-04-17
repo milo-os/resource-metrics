@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          volumeMounts:
+            - mountPath: /etc/milo/pki/trust
+              name: datum-control-plane-trust-bundle
+              readOnly: true
+            - mountPath: /etc/milo/pki/client
+              name: milo-client-cert
+              readOnly: true
+            - mountPath: /etc/milo/kubeconfig
+              name: discovery-kubeconfig
+              subPath: discovery-kubeconfig.yaml
+              readOnly: true
+      volumes:
+        - name: datum-control-plane-trust-bundle
+          configMap:
+            name: datum-control-plane-trust-bundle
+        - name: milo-client-cert
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/common-name: system:control@resource-metrics.miloapis.com
+              csi.cert-manager.io/fs-group: "65532"
+              csi.cert-manager.io/issuer-kind: ClusterIssuer
+              csi.cert-manager.io/issuer-name: datum-control-plane
+              csi.cert-manager.io/key-usages: client auth
+              csi.cert-manager.io/organizations: system:masters
+        - name: discovery-kubeconfig
+          configMap:
+            name: resource-metrics-discovery-kubeconfig

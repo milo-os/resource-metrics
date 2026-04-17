@@ -1,0 +1,23 @@
+name: publish-bundle
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish-kustomize-bundles:
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+    uses: datum-cloud/actions/.github/workflows/publish-kustomize-bundle.yaml@v1.13.1
+    with:
+      bundle-name: ghcr.io/datum-labs/resource-metrics-kustomize
+      bundle-path: config
+      image-overlays: config/manager
+      image-name: ghcr.io/datum-labs/resource-metrics
+    secrets: inherit

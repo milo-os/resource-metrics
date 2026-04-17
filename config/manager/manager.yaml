@@ -40,8 +40,8 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-          - --server-config=/config/service-config.yaml
-        image: ghcr.io/datum-cloud/resource-metrics:latest
+          - --server-config=/config/config.yaml
+        image: ghcr.io/datum-labs/resource-metrics:latest
         name: manager
         ports: []
         securityContext:
@@ -69,11 +69,11 @@ spec:
             cpu: 500m
             memory: 256Mi
         volumeMounts:
-          - name: service-config
+          - name: resource-metrics-config
             mountPath: /config
       volumes:
-        - name: service-config
+        - name: resource-metrics-config
           configMap:
-            name: service-config
+            name: resource-metrics-config
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

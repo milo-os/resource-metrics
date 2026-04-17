@@ -1,0 +1,41 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+  labels:
+    app.kubernetes.io/name: resource-metrics
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - selfsubjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - resourcemetrics.miloapis.com
+  resources:
+  - resourcemetricspolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - resourcemetrics.miloapis.com
+  resources:
+  - resourcemetricspolicies/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - resourcemetrics.miloapis.com
+  resources:
+  - resourcemetricspolicies/status
+  verbs:
+  - get
+  - patch
+  - update

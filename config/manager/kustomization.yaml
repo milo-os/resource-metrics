@@ -2,14 +2,14 @@ resources:
 - manager.yaml
 kind: Kustomization
 images:
-- name: ghcr.io/datum-cloud/resource-metrics
-  newName: ghcr.io/datum-cloud/resource-metrics
+- name: ghcr.io/datum-labs/resource-metrics
+  newName: ghcr.io/datum-labs/resource-metrics
   newTag: latest
 
 configMapGenerator:
 - files:
-  - service-config.yaml
-  name: service-config
+  - config.yaml
+  name: resource-metrics-config
   options:
     disableNameSuffixHash: true
 apiVersion: kustomize.config.k8s.io/v1beta1
