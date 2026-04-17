@@ -261,8 +261,6 @@ func (c *ProjectCollector) reconcile() {
 			toAdd = append(toAdd, gvr)
 		}
 	}
-	if len(toAdd) > 0 || len(toRemove) > 0 {
-	}
 	for gvr := range present {
 		if _, ok := desired[gvr]; !ok {
 			toRemove = append(toRemove, gvr)
