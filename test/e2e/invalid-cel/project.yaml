@@ -1,0 +1,8 @@
+apiVersion: resourcemanager.miloapis.com/v1alpha1
+kind: Project
+metadata:
+  name: e2e-invalid-cel
+spec:
+  ownerRef:
+    kind: Organization
+    name: e2e-org

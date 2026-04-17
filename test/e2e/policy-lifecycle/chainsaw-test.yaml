@@ -27,7 +27,7 @@ spec:
             file: ../fixtures/organization.yaml
         - apply:
             cluster: milo
-            file: ../fixtures/project.yaml
+            file: project.yaml
         - assert:
             cluster: milo
             timeout: 120s
@@ -35,7 +35,7 @@ spec:
               apiVersion: resourcemanager.miloapis.com/v1alpha1
               kind: Project
               metadata:
-                name: e2e-alpha
+                name: e2e-policy-lifecycle
               (length((status.conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
 
     - name: setup project-cp kubeconfig
@@ -48,7 +48,7 @@ spec:
               # Derive a project-scoped kubeconfig from whichever one is
               # already in use. We rewrite the cluster's `server` URL to
               # route through the milo aggregation path for project
-              # e2e-alpha. All credentials, CAs, and proxy settings carry
+              # e2e-policy-lifecycle. All credentials, CAs, and proxy settings carry
               # over from the source kubeconfig unchanged.
               src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
               if [ ! -f "$src" ]; then
@@ -58,7 +58,7 @@ spec:
 
               # Pick the current context's cluster server URL as our base.
               base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
-              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-alpha/control-plane"
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-policy-lifecycle/control-plane"
 
               # Copy the raw kubeconfig and substitute the server URL for
               # every cluster entry. Simpler than surgically editing by
