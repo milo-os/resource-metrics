@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,7 +44,7 @@ const projectUpMetricName = "resource_metrics_project_up"
 // identify which project the series belongs to. The Milo provider keys
 // clusters by project name, so this value is both the cluster identifier
 // and the canonical project identifier.
-const projectAttrKey = "datum.project"
+const projectAttrKey = "milo.project.name"
 
 // CollectorView is the read-only slice of ProjectCollector behaviour the
 // OTel runtime depends on. Exposed as an interface so tests can supply a
@@ -343,7 +344,7 @@ func (r *Runtime) observeProjectUp(_ context.Context, observer metric.Observer) 
 			v = 1.0
 		}
 		observer.ObserveFloat64(r.projectUp, v,
-			metric.WithAttributes(attribute.String(projectAttrKey, status.ClusterName)),
+			metric.WithAttributes(attribute.String(projectAttrKey, strings.TrimPrefix(status.ClusterName, "/"))),
 		)
 	}
 	return nil
@@ -473,7 +474,7 @@ func (r *Runtime) observeFamily(_ context.Context, observer metric.Observer, eff
 // (see runtime_test.go and the Phase 4 report for the deferred follow-up).
 func attrsFor(m metrics.Measurement, projectName string) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 1+len(m.Labels))
-	attrs = append(attrs, attribute.String(projectAttrKey, projectName))
+	attrs = append(attrs, attribute.String(projectAttrKey, strings.TrimPrefix(projectName, "/")))
 	for _, lp := range m.Labels {
 		attrs = append(attrs, attribute.String(lp.Name, lp.Value))
 	}

@@ -221,7 +221,7 @@ func TestRuntime_SyncRegistersFamilyGauges(t *testing.T) {
 		name, _ := dp.Attributes.Value(attribute.Key("name"))
 		byName[name.AsString()] = dp.Value
 		proj, present := dp.Attributes.Value(attribute.Key(projectAttrKey))
-		require.True(t, present, "datum.project attribute missing from data point")
+		require.True(t, present, "milo.project.name attribute missing from data point")
 		require.Equal(t, "proj-alpha", proj.AsString())
 	}
 	require.Equal(t, 3.0, byName["wl-a"])
