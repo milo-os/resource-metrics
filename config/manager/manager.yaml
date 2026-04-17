@@ -5,6 +5,7 @@ metadata:
     control-plane: controller-manager
     app.kubernetes.io/name: resource-metrics
     app.kubernetes.io/managed-by: kustomize
+    infra.datum.net/inject-datum-control-plane-trust-bundle: ""
   name: system
 ---
 apiVersion: apps/v1
