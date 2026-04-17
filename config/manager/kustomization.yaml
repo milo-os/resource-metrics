@@ -2,8 +2,8 @@ resources:
 - manager.yaml
 kind: Kustomization
 images:
-- name: ghcr.io/datum-labs/resource-metrics
-  newName: ghcr.io/datum-labs/resource-metrics
+- name: ghcr.io/datum-cloud/resource-metrics
+  newName: ghcr.io/datum-cloud/resource-metrics
   newTag: latest
 
 configMapGenerator:

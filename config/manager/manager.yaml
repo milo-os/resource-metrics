@@ -42,7 +42,7 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
           - --server-config=/config/config.yaml
-        image: ghcr.io/datum-labs/resource-metrics:latest
+        image: ghcr.io/datum-cloud/resource-metrics:latest
         name: manager
         ports: []
         securityContext:
