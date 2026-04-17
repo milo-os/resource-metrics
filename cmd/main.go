@@ -119,7 +119,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	runnables, provider, err := initializeClusterDiscovery(serverConfig, deploymentCluster, scheme)
+	runnables, provider, managementCluster, err := initializeClusterDiscovery(serverConfig, deploymentCluster, scheme)
 	if err != nil {
 		setupLog.Error(err, "unable to initialize cluster discovery")
 		os.Exit(1)
@@ -189,16 +189,10 @@ func main() {
 	}
 
 	if err = (&controller.ResourceMetricsPolicyReconciler{
-		// Use mgr's local-cluster client (same cache the mcbuilder
-		// watch source feeds from). Using a separate cluster.Cluster
-		// instance built from the same kubeconfig — what we did before
-		// — gives the reconciler its OWN cache, distinct from the
-		// watch's cache. Their sync states differ, so watch events
-		// arrive faster than the reconciler-side cache catches up:
-		// r.Get returns NotFound for a freshly-created policy, the
-		// reconciler treats it as a delete, and evicts the registry
-		// entry the next reconcile then has to recreate.
-		Client:         mgr.GetLocalManager().GetClient(),
+		// ResourceMetricsPolicy objects live in the management cluster
+		// (Milo control plane in milo mode, GKE in single mode). Use that
+		// cluster's client so the watch and reconciler share the same cache.
+		Client:         managementCluster.GetClient(),
 		Scheme:         scheme,
 		Env:            celEnv,
 		Registry:       registry,
@@ -214,14 +208,15 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	// Readiness verifies that (a) the deployment cluster's cache is synced
-	// (meaning the controller can actually read anything), and (b) the
-	// ResourceMetricsPolicy CRD is installed. Either missing is a fatal
-	// configuration problem we want to surface rather than crashloop on.
-	deploymentReadyClient := deploymentCluster.GetClient()
+	// Readiness verifies that (a) the management cluster's cache is synced and
+	// (b) the ResourceMetricsPolicy CRD is installed there. In Milo mode the
+	// management cluster is the Milo control plane; in single mode it is the
+	// local GKE cluster. Either missing is a fatal configuration problem we
+	// want to surface rather than crashloop on.
+	managementReadyClient := managementCluster.GetClient()
 	if err := mgr.AddReadyzCheck("readyz", func(req *http.Request) error {
 		var list resourcemetricsv1alpha1.ResourceMetricsPolicyList
-		if err := deploymentReadyClient.List(req.Context(), &list, client.Limit(1)); err != nil {
+		if err := managementReadyClient.List(req.Context(), &list, client.Limit(1)); err != nil {
 			return fmt.Errorf("resourcemetricspolicy CRD not reachable: %w", err)
 		}
 		return nil
@@ -352,7 +347,7 @@ func initializeClusterDiscovery(
 	serverConfig config.ResourceMetricsOperator,
 	deploymentCluster cluster.Cluster,
 	scheme *runtime.Scheme,
-) (runnables []manager.Runnable, provider runnableProvider, err error) {
+) (runnables []manager.Runnable, provider runnableProvider, managementCluster cluster.Cluster, err error) {
 	runnables = append(runnables, deploymentCluster)
 
 	switch serverConfig.Discovery.Mode {
@@ -361,21 +356,22 @@ func initializeClusterDiscovery(
 			Provider: mcsingle.New("single", deploymentCluster),
 			cluster:  deploymentCluster,
 		}
+		managementCluster = deploymentCluster
 
 	case milomulticluster.ProviderMilo:
 		discoveryRestConfig, err := serverConfig.Discovery.DiscoveryRestConfig()
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to get discovery rest config: %w", err)
+			return nil, nil, nil, fmt.Errorf("unable to get discovery rest config: %w", err)
 		}
 
 		projectRestConfig, err := serverConfig.Discovery.ProjectRestConfig()
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to get project rest config: %w", err)
+			return nil, nil, nil, fmt.Errorf("unable to get project rest config: %w", err)
 		}
 
 		discoveryManager, err := manager.New(discoveryRestConfig, manager.Options{})
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to set up discovery manager: %w", err)
+			return nil, nil, nil, fmt.Errorf("unable to set up discovery manager: %w", err)
 		}
 
 		miloProvider, err := miloprovider.New(discoveryManager, miloprovider.Options{
@@ -388,20 +384,30 @@ func initializeClusterDiscovery(
 			ProjectRestConfig:        projectRestConfig,
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("unable to create milo provider: %w", err)
+			return nil, nil, nil, fmt.Errorf("unable to create milo provider: %w", err)
+		}
+
+		// In Milo mode the management cluster is the Milo control plane —
+		// that is where ResourceMetricsPolicy objects live.
+		miloCluster, err := cluster.New(discoveryRestConfig, func(o *cluster.Options) {
+			o.Scheme = scheme
+		})
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("unable to create milo management cluster: %w", err)
 		}
 
 		provider = miloProvider
-		runnables = append(runnables, discoveryManager)
+		managementCluster = miloCluster
+		runnables = append(runnables, discoveryManager, miloCluster)
 
 	default:
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"unsupported cluster discovery mode %s",
 			serverConfig.Discovery.Mode,
 		)
 	}
 
-	return runnables, provider, nil
+	return runnables, provider, managementCluster, nil
 }
 
 func ignoreCanceled(err error) error {
