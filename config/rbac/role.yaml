@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: manager-role
+  name: resource-metrics-manager-role
 rules:
 - apiGroups:
   - authorization.k8s.io

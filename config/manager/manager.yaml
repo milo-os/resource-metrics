@@ -6,13 +6,13 @@ metadata:
     app.kubernetes.io/name: resource-metrics
     app.kubernetes.io/managed-by: kustomize
     infra.datum.net/inject-datum-control-plane-trust-bundle: ""
-  name: system
+  name: resource-metrics-system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: controller-manager
-  namespace: system
+  name: resource-metrics-controller-manager
+  namespace: resource-metrics-system
   labels:
     control-plane: controller-manager
     app.kubernetes.io/name: resource-metrics
@@ -70,11 +70,11 @@ spec:
             cpu: 500m
             memory: 512Mi
         volumeMounts:
-          - name: resource-metrics-config
+          - name: service-config
             mountPath: /config
       volumes:
-        - name: resource-metrics-config
+        - name: service-config
           configMap:
-            name: resource-metrics-config
-      serviceAccountName: controller-manager
+            name: resource-metrics-service-config
+      serviceAccountName: resource-metrics-controller-manager
       terminationGracePeriodSeconds: 10

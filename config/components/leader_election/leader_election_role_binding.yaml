@@ -4,13 +4,13 @@ metadata:
   labels:
     app.kubernetes.io/name: resource-metrics
     app.kubernetes.io/managed-by: kustomize
-  name: leader-election-rolebinding
-  namespace: system
+  name: resource-metrics-leader-election-rolebinding
+  namespace: resource-metrics-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: leader-election-role
+  name: resource-metrics-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: controller-manager
-  namespace: system
+  name: resource-metrics-controller-manager
+  namespace: resource-metrics-system

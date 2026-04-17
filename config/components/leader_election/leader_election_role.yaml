@@ -4,8 +4,8 @@ metadata:
   labels:
     app.kubernetes.io/name: resource-metrics
     app.kubernetes.io/managed-by: kustomize
-  name: leader-election-role
-  namespace: system
+  name: resource-metrics-leader-election-role
+  namespace: resource-metrics-system
 rules:
 - apiGroups:
   - coordination.k8s.io

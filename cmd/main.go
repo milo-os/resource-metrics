@@ -172,9 +172,9 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "resourcemetrics.miloapis.com",
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        "resourcemetrics.miloapis.com",
 		LeaderElectionNamespace: "milo-system",
 	})
 	if err != nil {

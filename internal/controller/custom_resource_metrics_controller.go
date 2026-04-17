@@ -405,4 +405,3 @@ func (r *ResourceMetricsPolicyReconciler) SetupWithManager(mgr mcmanager.Manager
 		Named("resourcemetricspolicy").
 		Complete(r)
 }
-
