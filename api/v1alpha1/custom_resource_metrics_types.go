@@ -156,6 +156,7 @@ type ResourceMetricsPolicyStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:metadata:annotations="discovery.miloapis.com/parent-contexts=Platform"
 
 // ResourceMetricsPolicy is the Schema for the resourcemetricspolicies API.
 type ResourceMetricsPolicy struct {
