@@ -103,7 +103,7 @@ spec:
               # the result array contains at least 2 elements, confirming that
               # forEach produced one series per finalizer rather than a single
               # per-object series.
-              query='datum_configmap_finalizer{name="e2e-foreach-marker",datum_project="/e2e-foreach-emission"}'
+              query='datum_configmap_finalizer{name="e2e-foreach-marker",milo_project_name="e2e-foreach-emission"}'
               vm_url='http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query'
 
               attempt=0
