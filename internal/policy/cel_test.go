@@ -332,4 +332,3 @@ func TestEvalLabelWithItem_ResolvesItemField(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Ready", got)
 }
-

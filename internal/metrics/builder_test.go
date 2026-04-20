@@ -181,7 +181,6 @@ func TestBuild_ForEach_EmptyArrayEmitsZeroMeasurements(t *testing.T) {
 	require.Empty(t, emitted, "empty conditions array must emit zero measurements")
 }
 
-
 // TestBuild_ForEach_ElementErrorSkipsElementContinuesSiblings verifies that
 // when one element in a forEach array causes a label expression to error, that
 // element is skipped but the remaining elements in the array still emit
