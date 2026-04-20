@@ -76,8 +76,11 @@ spec:
             file: policy.yaml
         - assert:
             cluster: milo
-            # Allow time: ~30s cache-sync timeout + 10s requeue + margin.
-            timeout: 90s
+            # Allow time for: project CP spinup (project may become
+            # Ready right at the 120s prerequisite limit), cluster
+            # engagement, denial detection ("without waiting for sync"
+            # so ~instant once engaged), and a 10s controller requeue.
+            timeout: 180s
             resource:
               apiVersion: resourcemetrics.miloapis.com/v1alpha1
               kind: ResourceMetricsPolicy
