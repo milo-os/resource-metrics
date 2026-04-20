@@ -258,10 +258,7 @@ func messageForPermissionDenied(missing []resourcemetricsv1alpha1.GVRRef) string
 	if len(missing) == 0 {
 		return "All referenced GVRs are authorized on every engaged project."
 	}
-	n := len(missing)
-	if n > 3 {
-		n = 3
-	}
+	n := min(len(missing), 3)
 	parts := make([]string, 0, n)
 	for _, g := range missing[:n] {
 		parts = append(parts, fmt.Sprintf("%s/%s/%s", g.Group, g.Version, g.Resource))

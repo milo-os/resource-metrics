@@ -14,6 +14,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/ext"
 	"github.com/google/cel-go/interpreter"
 )
@@ -40,6 +41,7 @@ var (
 	ErrCycleBudgetExceeded  = errors.New("cel: per-cycle evaluation budget exceeded")
 	ErrLabelTooLong         = errors.New("cel: label value exceeded the configured length limit")
 	ErrLabelHasControlChars = errors.New("cel: label value contained control characters")
+	ErrForEachNotList       = errors.New("cel: forEach expression did not produce a list")
 )
 
 // OnLabelSanitized is called once per label value that had at least one
@@ -165,6 +167,17 @@ func NewEnv() (*Env, error) {
 	return &Env{env: env}, nil
 }
 
+// NewItemEnv returns a new Env that extends the base env with an "item"
+// variable of dyn type. Use this env when compiling value and label
+// expressions for forEach metrics.
+func (e *Env) NewItemEnv() (*Env, error) {
+	extended, err := e.env.Extend(cel.Variable("item", cel.DynType))
+	if err != nil {
+		return nil, fmt.Errorf("cel: extend env with item: %w", err)
+	}
+	return &Env{env: extended}, nil
+}
+
 // Compile parses, type-checks, and programs the given expression. The returned
 // Program has a runtime cost limit applied so pathological comprehensions will
 // be cancelled mid-evaluation rather than pegging a core.
@@ -191,7 +204,9 @@ func (e *Env) Compile(expr string) (cel.Program, error) {
 
 // evalWithRecover runs prog with a bounded context and translates panics into
 // ErrEvalPanic. Returns the raw ref.Val on success; callers coerce as needed.
-func evalWithRecover(prog cel.Program, object map[string]any) (out ref.Val, err error) {
+// activation is passed directly to ContextEval so callers control the full
+// variable binding (enabling item injection for forEach expressions).
+func evalWithRecover(prog cel.Program, activation map[string]any) (out ref.Val, err error) {
 	if prog == nil {
 		return nil, errors.New("cel: nil program")
 	}
@@ -206,11 +221,23 @@ func evalWithRecover(prog cel.Program, object map[string]any) (out ref.Val, err 
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), evalTimeout)
 	defer cancel()
-	val, _, evalErr := prog.ContextEval(ctx, map[string]any{"object": object})
+	val, _, evalErr := prog.ContextEval(ctx, activation)
 	if evalErr != nil {
 		return nil, classifyEvalError(ctx, evalErr)
 	}
 	return val, nil
+}
+
+// objectActivation builds the standard activation map used when evaluating
+// expressions that only have access to the object variable.
+func objectActivation(object map[string]any) map[string]any {
+	return map[string]any{"object": object}
+}
+
+// itemActivation builds the activation map for forEach expressions, binding
+// both object and item.
+func itemActivation(object map[string]any, item any) map[string]any {
+	return map[string]any{"object": object, "item": item}
 }
 
 // classifyEvalError maps a cel-go evaluation error onto one of our sentinels
@@ -240,19 +267,12 @@ func classifyEvalError(ctx context.Context, err error) error {
 	return err
 }
 
-// EvalValue evaluates a CEL expression expected to produce a numeric metric
-// value and coerces the result to float64. Bools become 0/1 and parseable
-// strings are accepted. A nil program is a hard error — call sites should
-// treat nil as constant-1.0 before calling here.
-//
-// If budget is non-nil, it is consumed exactly once before evaluation. A
-// nil budget disables per-cycle budget enforcement so existing callers do
-// not need to thread one through.
-func EvalValue(prog cel.Program, object map[string]any, budget *CycleBudget) (float64, error) {
-	if err := budget.Consume(); err != nil {
-		return 0, err
-	}
-	val, err := evalWithRecover(prog, object)
+// evalAndCoerceFloat64 evaluates prog with the given activation and coerces
+// the result to float64. It is the shared implementation for EvalValue and
+// EvalValueWithItem; callers handle the budget.Consume call before invoking
+// this helper.
+func evalAndCoerceFloat64(prog cel.Program, activation map[string]any) (float64, error) {
+	val, err := evalWithRecover(prog, activation)
 	if err != nil {
 		return 0, err
 	}
@@ -282,6 +302,37 @@ func EvalValue(prog cel.Program, object map[string]any, budget *CycleBudget) (fl
 	return 0, &EvalTypeError{Type: fmt.Sprintf("%T", val)}
 }
 
+// evalAndCoerceString evaluates prog with the given activation and coerces
+// the result to a sanitized string label value. It is the shared
+// implementation for EvalLabel and EvalLabelWithItem; callers handle the
+// budget.Consume call before invoking this helper.
+func evalAndCoerceString(prog cel.Program, activation map[string]any, maxBytes int) (string, error) {
+	val, err := evalWithRecover(prog, activation)
+	if err != nil {
+		return "", err
+	}
+	raw, err := coerceLabelString(val)
+	if err != nil {
+		return "", err
+	}
+	return sanitizeLabelValue(raw, maxBytes), nil
+}
+
+// EvalValue evaluates a CEL expression expected to produce a numeric metric
+// value and coerces the result to float64. Bools become 0/1 and parseable
+// strings are accepted. A nil program is a hard error — call sites should
+// treat nil as constant-1.0 before calling here.
+//
+// If budget is non-nil, it is consumed exactly once before evaluation. A
+// nil budget disables per-cycle budget enforcement so existing callers do
+// not need to thread one through.
+func EvalValue(prog cel.Program, object map[string]any, budget *CycleBudget) (float64, error) {
+	if err := budget.Consume(); err != nil {
+		return 0, err
+	}
+	return evalAndCoerceFloat64(prog, objectActivation(object))
+}
+
 // EvalLabel evaluates a CEL expression expected to produce a label value and
 // coerces the result to string. The returned string is sanitized: C0 control
 // characters (\x00..\x1f) and DEL (\x7f) are replaced with a single space,
@@ -299,15 +350,62 @@ func EvalLabel(prog cel.Program, object map[string]any, budget *CycleBudget) (st
 	if err := budget.Consume(); err != nil {
 		return "", err
 	}
-	val, err := evalWithRecover(prog, object)
+	return evalAndCoerceString(prog, objectActivation(object), DefaultLabelValueMaxBytes)
+}
+
+// EvalForEach evaluates prog against object and expects the result to be a CEL
+// list. It returns the elements as []any. An empty list is not an error.
+// ErrForEachNotList is returned if the result is not a list type.
+//
+// If budget is non-nil, it is consumed exactly once before evaluation. Budget
+// protection for individual elements is provided by the Consume calls in
+// EvalValueWithItem and EvalLabelWithItem. A nil budget disables per-cycle
+// budget enforcement.
+func EvalForEach(prog cel.Program, object map[string]any, budget *CycleBudget) ([]any, error) {
+	if err := budget.Consume(); err != nil {
+		return nil, err
+	}
+	val, err := evalWithRecover(prog, objectActivation(object))
 	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, fmt.Errorf("%w: got nil", ErrForEachNotList)
+	}
+	lister, ok := val.(traits.Lister)
+	if !ok {
+		return nil, fmt.Errorf("%w: got %T", ErrForEachNotList, val)
+	}
+	size := lister.Size()
+	n, ok := size.(types.Int)
+	if !ok {
+		return nil, fmt.Errorf("%w: could not determine list size", ErrForEachNotList)
+	}
+
+	out := make([]any, 0, int(n))
+	it := lister.Iterator()
+	for it.HasNext() == types.True {
+		out = append(out, it.Next())
+	}
+	return out, nil
+}
+
+// EvalValueWithItem evaluates a value expression with both "object" and "item"
+// in scope. It follows the same coercion and budget logic as EvalValue.
+func EvalValueWithItem(prog cel.Program, object map[string]any, item any, budget *CycleBudget) (float64, error) {
+	if err := budget.Consume(); err != nil {
+		return 0, err
+	}
+	return evalAndCoerceFloat64(prog, itemActivation(object, item))
+}
+
+// EvalLabelWithItem evaluates a label expression with both "object" and "item"
+// in scope. It follows the same coercion, sanitization, and budget logic as EvalLabel.
+func EvalLabelWithItem(prog cel.Program, object map[string]any, item any, budget *CycleBudget) (string, error) {
+	if err := budget.Consume(); err != nil {
 		return "", err
 	}
-	raw, err := coerceLabelString(val)
-	if err != nil {
-		return "", err
-	}
-	return sanitizeLabelValue(raw, DefaultLabelValueMaxBytes), nil
+	return evalAndCoerceString(prog, itemActivation(object, item), DefaultLabelValueMaxBytes)
 }
 
 // coerceLabelString performs only the CEL->string conversion. Sanitization

@@ -1,0 +1,157 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: foreach-metrics-emission
+spec:
+  description: |
+    End-to-end verification that a forEach-based policy emits one series per
+    array element into Victoria Metrics.
+
+    A single ConfigMap with two finalizers is created on the project CP. The
+    policy iterates over object.metadata.finalizers and emits one
+    datum_configmap_finalizer series per element. The assertion queries VM and
+    confirms that exactly two series are present — one for each finalizer —
+    proving that forEach produces per-element fan-out rather than a single
+    per-object series.
+
+    Pipeline exercised:
+        project CP watch -> controller (forEach) -> OTel collector -> VM remote write
+
+    VM query target:
+        http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query
+
+  clusters:
+    project-cp:
+      kubeconfig: ./.project-cp.kubeconfig
+
+  steps:
+    - name: prerequisites (org, project, project-cp kubeconfig, aggregation)
+      try:
+        - apply:
+            cluster: milo
+            file: ../fixtures/organization.yaml
+        - apply:
+            cluster: milo
+            file: project.yaml
+        - assert:
+            cluster: milo
+            timeout: 120s
+            resource:
+              apiVersion: resourcemanager.miloapis.com/v1alpha1
+              kind: Project
+              metadata:
+                name: e2e-foreach-emission
+              (length((status.conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              src="${MILO_KUBECONFIG:-$PWD/.test-infra/milo-kubeconfig}"
+              base_server=$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.clusters[?(@.name=="'"$(kubectl --kubeconfig "$src" config view --raw -o jsonpath='{.contexts[?(@.name=="'"$(kubectl --kubeconfig "$src" config current-context)"'")].context.cluster}')"'")].cluster.server}')
+              new_server="${base_server%/}/apis/resourcemanager.miloapis.com/v1alpha1/projects/e2e-foreach-emission/control-plane"
+              kubectl --kubeconfig "$src" config view --raw --flatten \
+                | sed -E "s#server: ${base_server}\$#server: ${new_server}#" \
+                > ./.project-cp.kubeconfig
+        - apply:
+            cluster: project-cp
+            file: ../fixtures/aggregation-labels.yaml
+
+    - name: apply the policy and wait Ready
+      try:
+        - apply:
+            cluster: milo
+            file: policy.yaml
+        - assert:
+            cluster: milo
+            timeout: 30s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-foreach-emission
+              status:
+                activeGenerators: 1
+                (length((conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
+
+    - name: create a marker ConfigMap with two finalizers on the project CP
+      try:
+        - apply:
+            cluster: project-cp
+            file: marker-configmap.yaml
+        - assert:
+            cluster: project-cp
+            resource:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: e2e-foreach-marker
+                namespace: default
+
+    - name: wait for two datum_configmap_finalizer series to land in Victoria Metrics
+      try:
+        - script:
+            # OTel collection interval is 5s (see deployment config).
+            # Allow up to 90s for: informer sync -> collection tick ->
+            # OTLP push -> collector remote-write -> VM ingest visibility.
+            # We poll until exactly two series appear (one per finalizer),
+            # which proves that forEach emitted per-element fan-out.
+            timeout: 120s
+            content: |
+              set -eu
+
+              # Query for both series by name + project label. We assert that
+              # the result array contains at least 2 elements, confirming that
+              # forEach produced one series per finalizer rather than a single
+              # per-object series.
+              query='datum_configmap_finalizer{name="e2e-foreach-marker",datum_project="/e2e-foreach-emission"}'
+              vm_url='http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query'
+
+              attempt=0
+              until [ "$attempt" -ge 18 ]; do
+                attempt=$((attempt+1))
+                echo "attempt $attempt: querying VM for $query"
+                out=$(kubectl run e2e-foreach-vmquery-$attempt \
+                        --rm -i --restart=Never --quiet \
+                        --image=curlimages/curl:8.10.1 \
+                        --timeout=20s \
+                        -- curl -fsS --max-time 5 --data-urlencode "query=${query}" "${vm_url}" \
+                      || true)
+                # Strip kubectl's pod-termination line.
+                json=$(printf '%s' "$out" | sed '/pod ".*" deleted/d')
+                echo "response: $json"
+                # Require at least two result objects in the array, confirming
+                # forEach emitted one series per finalizer.
+                count=$(printf '%s' "$json" | grep -o '"metric":{' | wc -l | tr -d ' ')
+                echo "series count: $count"
+                if [ "$count" -ge 2 ]; then
+                  echo "forEach emitted $count series (expected >=2)"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "datum_configmap_finalizer{name=e2e-foreach-marker} never produced 2 series" >&2
+              exit 1
+
+    - name: delete marker ConfigMap
+      try:
+        # Remove the finalizers first so the object is actually deleted rather
+        # than left in a Terminating state (Kubernetes blocks deletion until
+        # all finalizers are cleared).
+        - script:
+            timeout: 30s
+            content: |
+              set -eu
+              kubectl --kubeconfig ./.project-cp.kubeconfig patch configmap e2e-foreach-marker \
+                -n default \
+                --type=json \
+                -p='[{"op":"remove","path":"/metadata/finalizers"}]' \
+                || true
+        - delete:
+            cluster: project-cp
+            ref:
+              apiVersion: v1
+              kind: ConfigMap
+              namespace: default
+              name: e2e-foreach-marker
+
+  # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

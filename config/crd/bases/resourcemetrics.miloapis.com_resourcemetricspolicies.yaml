@@ -69,6 +69,15 @@ spec:
                               description: MetricSpec defines a single metric series
                                 within a family.
                               properties:
+                                forEach:
+                                  description: |-
+                                    ForEach, when set, is a CEL expression that must evaluate to a list.
+                                    The metric is emitted once per element of that list. Within Value and
+                                    each label's Value expression, the variable "item" is bound to the
+                                    current list element (type dyn). When ForEach is absent, the metric
+                                    is emitted once per object (existing behaviour).
+                                  maxLength: 4096
+                                  type: string
                                 labels:
                                   description: Labels defines the labels to attach
                                     to this metric series.

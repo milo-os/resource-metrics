@@ -492,7 +492,7 @@ func (r *Runtime) Shutdown(_ context.Context) error {
 
 	var firstErr error
 	if r.projectUpReg != nil {
-		if err := r.projectUpReg.Unregister(); err != nil && firstErr == nil {
+		if err := r.projectUpReg.Unregister(); err != nil {
 			firstErr = err
 		}
 		r.projectUpReg = nil

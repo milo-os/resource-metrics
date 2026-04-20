@@ -92,6 +92,68 @@ func Build(
 				if metric == nil {
 					continue
 				}
+
+				if metric.ForEachProgram != nil {
+					items, err := policy.EvalForEach(metric.ForEachProgram, obj, budget)
+					if err != nil {
+						recordErr(BuildError{
+							Policy:    compiled.Name.String(),
+							Generator: generator.Name,
+							Family:    family.Name,
+							Object:    objName,
+							Err:       err,
+						})
+						if errors.Is(err, policy.ErrCycleBudgetExceeded) {
+							return errs
+						}
+						continue
+					}
+					for _, item := range items {
+						labels, labelErr := evalLabelsWithItem(obj, item, metric.Labels, budget)
+						if labelErr != nil {
+							recordErr(BuildError{
+								Policy:    compiled.Name.String(),
+								Generator: generator.Name,
+								Family:    family.Name,
+								Object:    objName,
+								Err:       labelErr,
+							})
+							if errors.Is(labelErr, policy.ErrCycleBudgetExceeded) {
+								return errs
+							}
+							continue
+						}
+						var (
+							value float64
+							verr  error
+						)
+						if metric.ValueProgram == nil {
+							value = 1.0
+						} else {
+							value, verr = policy.EvalValueWithItem(metric.ValueProgram, obj, item, budget)
+							if verr != nil {
+								recordErr(BuildError{
+									Policy:    compiled.Name.String(),
+									Generator: generator.Name,
+									Family:    family.Name,
+									Object:    objName,
+									Err:       verr,
+								})
+								if errors.Is(verr, policy.ErrCycleBudgetExceeded) {
+									return errs
+								}
+								continue
+							}
+						}
+						emit(family.Name, Measurement{
+							FamilyName: family.Name,
+							Value:      value,
+							Labels:     labels,
+						})
+					}
+					continue
+				}
+
 				labels, labelErr := evalLabels(obj, metric.Labels, budget)
 				if labelErr != nil {
 					recordErr(BuildError{
@@ -151,6 +213,24 @@ func evalLabels(obj map[string]any, labels []*policy.CompiledLabel, budget *poli
 			continue
 		}
 		v, err := policy.EvalLabel(lbl.ValueProgram, obj, budget)
+		if err != nil {
+			return nil, fmt.Errorf("label %q: %w", lbl.Name, err)
+		}
+		out = append(out, LabelPair{Name: lbl.Name, Value: v})
+	}
+	return out, nil
+}
+
+func evalLabelsWithItem(obj map[string]any, item any, labels []*policy.CompiledLabel, budget *policy.CycleBudget) ([]LabelPair, error) {
+	if len(labels) == 0 {
+		return nil, nil
+	}
+	out := make([]LabelPair, 0, len(labels))
+	for _, lbl := range labels {
+		if lbl == nil || lbl.ValueProgram == nil {
+			continue
+		}
+		v, err := policy.EvalLabelWithItem(lbl.ValueProgram, obj, item, budget)
 		if err != nil {
 			return nil, fmt.Errorf("label %q: %w", lbl.Name, err)
 		}

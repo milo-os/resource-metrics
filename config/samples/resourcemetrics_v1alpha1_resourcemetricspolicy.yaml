@@ -43,3 +43,23 @@ spec:
                   value: "object.metadata.namespace"
                 - name: condition
                   value: "'Ready'"
+
+    - name: workload-conditions
+      resource:
+        group: compute.miloapis.com
+        version: v1alpha1
+        resource: workloads
+      families:
+        - name: workload_condition_status
+          help: "One series per status condition on each Workload."
+          type: gauge
+          metrics:
+            - forEach: "object.status.conditions"
+              value: "item.status == 'True' ? 1.0 : 0.0"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: condition_type
+                  value: "item.type"
