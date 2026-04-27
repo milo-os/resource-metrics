@@ -10,7 +10,7 @@ vars:
   # semver tag once the PR merges and a release is cut.
   TEST_INFRA_REPO_REF: 'feat/composable-observability'
   TEST_INFRA_CLUSTER_NAME: 'test-infra'
-  IMG_NAME: 'ghcr.io/datum-cloud/resource-metrics'
+  IMG_NAME: 'ghcr.io/milo-os/resource-metrics'
   IMG_TAG: 'dev'
   IMG: '{{.IMG_NAME}}:{{.IMG_TAG}}'
   # Milo publishes oci://ghcr.io/datum-cloud/milo-kustomize from the
