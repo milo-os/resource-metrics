@@ -259,3 +259,76 @@ func TestCycleBudget_DeadlineExceeded(t *testing.T) {
 	require.True(t, errors.Is(err, policy.ErrCycleBudgetExceeded),
 		"a past deadline must produce ErrCycleBudgetExceeded, got %v", err)
 }
+
+func mustItemEnv(t *testing.T) *policy.Env {
+	t.Helper()
+	base := mustEnv(t)
+	env, err := base.NewItemEnv()
+	require.NoError(t, err)
+	return env
+}
+
+func TestEvalForEach_ReturnsList(t *testing.T) {
+	env := mustEnv(t)
+	prog, err := env.Compile("object.status.conditions")
+	require.NoError(t, err)
+
+	obj := map[string]any{
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Ready"},
+				map[string]any{"type": "Available"},
+			},
+		},
+	}
+	items, err := policy.EvalForEach(prog, obj, nil)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+}
+
+func TestEvalForEach_EmptyListIsNotError(t *testing.T) {
+	env := mustEnv(t)
+	prog, err := env.Compile("object.items")
+	require.NoError(t, err)
+
+	obj := map[string]any{"items": []any{}}
+	items, err := policy.EvalForEach(prog, obj, nil)
+	require.NoError(t, err)
+	require.Empty(t, items)
+}
+
+func TestEvalForEach_NonListReturnsErr(t *testing.T) {
+	env := mustEnv(t)
+	prog, err := env.Compile("object.metadata.name")
+	require.NoError(t, err)
+
+	obj := map[string]any{"metadata": map[string]any{"name": "foo"}}
+	_, err = policy.EvalForEach(prog, obj, nil)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, policy.ErrForEachNotList),
+		"expected ErrForEachNotList, got %v", err)
+}
+
+func TestEvalValueWithItem_ResolvesItemField(t *testing.T) {
+	env := mustItemEnv(t)
+	prog, err := env.Compile("double(item.replicas)")
+	require.NoError(t, err)
+
+	obj := map[string]any{}
+	item := map[string]any{"replicas": int64(3)}
+	got, err := policy.EvalValueWithItem(prog, obj, item, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3.0, got)
+}
+
+func TestEvalLabelWithItem_ResolvesItemField(t *testing.T) {
+	env := mustItemEnv(t)
+	prog, err := env.Compile("item.type")
+	require.NoError(t, err)
+
+	obj := map[string]any{}
+	item := map[string]any{"type": "Ready"}
+	got, err := policy.EvalLabelWithItem(prog, obj, item, nil)
+	require.NoError(t, err)
+	require.Equal(t, "Ready", got)
+}

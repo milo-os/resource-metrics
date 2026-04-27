@@ -418,7 +418,7 @@ func countReplicaDataPoints(t *testing.T, reader *sdkmetric.ManualReader) int {
 func TestRuntime_CycleBudgetShortCircuits(t *testing.T) {
 	const nObjects = 50
 	objs := make([]map[string]any, 0, nObjects)
-	for i := 0; i < nObjects; i++ {
+	for i := range nObjects {
 		objs = append(objs, workloadObject(
 			"wl-"+time.Duration(i).String(), int64(i)))
 	}

@@ -84,6 +84,16 @@ type MetricFamilySpec struct {
 
 // MetricSpec defines a single metric series within a family.
 type MetricSpec struct {
+	// ForEach, when set, is a CEL expression that must evaluate to a list.
+	// The metric is emitted once per element of that list. Within Value and
+	// each label's Value expression, the variable "item" is bound to the
+	// current list element (type dyn). When ForEach is absent, the metric
+	// is emitted once per object (existing behaviour).
+	//
+	// +optional
+	// +kubebuilder:validation:MaxLength=4096
+	ForEach *string `json:"forEach,omitempty"`
+
 	// Labels defines the labels to attach to this metric series.
 	Labels []LabelSpec `json:"labels,omitempty"`
 
