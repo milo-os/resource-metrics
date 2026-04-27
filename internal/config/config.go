@@ -106,9 +106,6 @@ func SetDefaults_OtelConfig(obj *OtelConfig) {
 	if obj.CollectionInterval.Duration == 0 {
 		obj.CollectionInterval = metav1.Duration{Duration: 30 * time.Second}
 	}
-	if obj.DefaultMetricPrefix == "" {
-		obj.DefaultMetricPrefix = "datum_"
-	}
 }
 
 // DiscoveryRestConfig returns the REST config to use for project discovery.

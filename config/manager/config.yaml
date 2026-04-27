@@ -12,4 +12,4 @@ otel:
   endpoint: otel-collector-collector.otel-collector-system:4317
   insecure: true
   collectionInterval: 30s
-  defaultMetricPrefix: datum_
+  defaultMetricPrefix: ""

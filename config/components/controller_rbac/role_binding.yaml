@@ -4,12 +4,12 @@ metadata:
   labels:
     app.kubernetes.io/name: resource-metrics
     app.kubernetes.io/managed-by: kustomize
-  name: manager-rolebinding
+  name: resource-metrics-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: manager-role
+  name: resource-metrics-manager-role
 subjects:
 - kind: ServiceAccount
-  name: controller-manager
-  namespace: system
+  name: resource-metrics-controller-manager
+  namespace: resource-metrics-system

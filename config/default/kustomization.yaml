@@ -1,8 +1,6 @@
 # Adds namespace to all resources.
 namespace: resource-metrics-system
 
-namePrefix: resource-metrics-
-
 resources:
 - ../crd
 - ../rbac

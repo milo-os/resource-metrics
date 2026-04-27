@@ -5,4 +5,4 @@ patches:
   - path: manager-patch.yaml
     target:
       kind: Deployment
-      name: controller-manager
+      name: resource-metrics-controller-manager

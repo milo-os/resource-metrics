@@ -19,7 +19,7 @@ resources:
 # file `server.yaml` so the manager picks it up at
 # /etc/resource-metrics/server.yaml per deployment-patch.yaml.
 configMapGenerator:
-  - name: service-config
+  - name: resource-metrics-service-config
     behavior: replace
     files:
       - server.yaml=server-config.yaml

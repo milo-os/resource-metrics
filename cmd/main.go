@@ -108,18 +108,7 @@ func main() {
 	// while preserving header keys.
 	setupLog.Info("server config", "config", serverConfig.String())
 
-	// Retrieve the configuration for the cluster that the operator is deployed in.
-	deploymentClusterConfig := ctrl.GetConfigOrDie()
-
-	deploymentCluster, err := cluster.New(deploymentClusterConfig, func(o *cluster.Options) {
-		o.Scheme = scheme
-	})
-	if err != nil {
-		setupLog.Error(err, "failed to construct deployment cluster")
-		os.Exit(1)
-	}
-
-	runnables, provider, err := initializeClusterDiscovery(serverConfig, deploymentCluster, scheme)
+	runnables, provider, err := initializeClusterDiscovery(serverConfig, scheme)
 	if err != nil {
 		setupLog.Error(err, "unable to initialize cluster discovery")
 		os.Exit(1)
@@ -174,14 +163,19 @@ func main() {
 	// provider.Run.
 	provider = wrapProviderWithCollector(provider, clusterManager)
 
-	mgr, err := mcmanager.New(deploymentClusterConfig, provider, ctrl.Options{
+	// ctrl.GetConfigOrDie respects the KUBECONFIG env var and --kubeconfig
+	// flag. In milo mode the deployment sets KUBECONFIG=/etc/milo/kubeconfig
+	// so the local cluster (and therefore the ResourceMetricsPolicy watch and
+	// leader election) targets the Milo control plane.
+	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), provider, ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "resourcemetrics.miloapis.com",
+		HealthProbeBindAddress:  probeAddr,
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionID:        "resourcemetrics.miloapis.com",
+		LeaderElectionNamespace: "milo-system",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -189,15 +183,6 @@ func main() {
 	}
 
 	if err = (&controller.ResourceMetricsPolicyReconciler{
-		// Use mgr's local-cluster client (same cache the mcbuilder
-		// watch source feeds from). Using a separate cluster.Cluster
-		// instance built from the same kubeconfig — what we did before
-		// — gives the reconciler its OWN cache, distinct from the
-		// watch's cache. Their sync states differ, so watch events
-		// arrive faster than the reconciler-side cache catches up:
-		// r.Get returns NotFound for a freshly-created policy, the
-		// reconciler treats it as a delete, and evicts the registry
-		// entry the next reconcile then has to recreate.
 		Client:         mgr.GetLocalManager().GetClient(),
 		Scheme:         scheme,
 		Env:            celEnv,
@@ -214,14 +199,14 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	// Readiness verifies that (a) the deployment cluster's cache is synced
-	// (meaning the controller can actually read anything), and (b) the
-	// ResourceMetricsPolicy CRD is installed. Either missing is a fatal
-	// configuration problem we want to surface rather than crashloop on.
-	deploymentReadyClient := deploymentCluster.GetClient()
+	// Readiness verifies that (a) the local manager's cache is synced and
+	// (b) the ResourceMetricsPolicy CRD is installed there. In Milo mode the
+	// local manager targets the Milo control plane; in single mode it is the
+	// GKE cluster. Either missing is a fatal configuration problem we want to
+	// surface rather than crashloop on.
 	if err := mgr.AddReadyzCheck("readyz", func(req *http.Request) error {
 		var list resourcemetricsv1alpha1.ResourceMetricsPolicyList
-		if err := deploymentReadyClient.List(req.Context(), &list, client.Limit(1)); err != nil {
+		if err := mgr.GetLocalManager().GetClient().List(req.Context(), &list, client.Limit(1)); err != nil {
 			return fmt.Errorf("resourcemetricspolicy CRD not reachable: %w", err)
 		}
 		return nil
@@ -350,13 +335,18 @@ func wrapProviderWithCollector(p runnableProvider, cm *collector.ClusterManager)
 
 func initializeClusterDiscovery(
 	serverConfig config.ResourceMetricsOperator,
-	deploymentCluster cluster.Cluster,
 	scheme *runtime.Scheme,
 ) (runnables []manager.Runnable, provider runnableProvider, err error) {
-	runnables = append(runnables, deploymentCluster)
-
 	switch serverConfig.Discovery.Mode {
 	case milomulticluster.ProviderSingle:
+		// In single mode the operator manages exactly one cluster — itself.
+		deploymentCluster, err := cluster.New(ctrl.GetConfigOrDie(), func(o *cluster.Options) {
+			o.Scheme = scheme
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to construct deployment cluster: %w", err)
+		}
+		runnables = append(runnables, deploymentCluster)
 		provider = &wrappedSingleClusterProvider{
 			Provider: mcsingle.New("single", deploymentCluster),
 			cluster:  deploymentCluster,

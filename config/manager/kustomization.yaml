@@ -9,7 +9,7 @@ images:
 configMapGenerator:
 - files:
   - config.yaml
-  name: resource-metrics-config
+  name: resource-metrics-service-config
   options:
     disableNameSuffixHash: true
 apiVersion: kustomize.config.k8s.io/v1beta1

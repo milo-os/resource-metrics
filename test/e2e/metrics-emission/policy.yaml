@@ -12,7 +12,7 @@ spec:
         version: v1
         resource: configmaps
       families:
-        - name: configmap_info
+        - name: datum_configmap_info
           help: "Metadata about each ConfigMap reachable on project control planes."
           type: gauge
           metrics:
