@@ -4,6 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
+    discovery.miloapis.com/parent-contexts: Platform
   name: resourcemetricspolicies.resourcemetrics.miloapis.com
 spec:
   group: resourcemetrics.miloapis.com
