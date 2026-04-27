@@ -1,0 +1,13 @@
+# Marker ConfigMap applied to the project control plane.
+# Two finalizers are set so that the forEach policy emits exactly two series
+# from this single object — one per finalizer string.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-foreach-marker
+  namespace: default
+  finalizers:
+    - test.e2e.resource-metrics/alpha
+    - test.e2e.resource-metrics/beta
+data:
+  purpose: "forEach e2e test: emits datum_configmap_finalizer twice (one per finalizer)."

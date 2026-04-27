@@ -24,6 +24,10 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 	}
 	var errs []CompileError
 
+	// itemEnv extends the base env with the "item" variable used by forEach
+	// metrics. We build it once and reuse it across all generators.
+	itemEnv, itemEnvErr := env.NewItemEnv()
+
 	for _, gen := range policy.Spec.Generators {
 		cg := &CompiledGenerator{
 			Name:     gen.Name,
@@ -51,16 +55,52 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 				cm := &CompiledMetric{
 					Labels: make([]*CompiledLabel, 0, len(m.Labels)),
 				}
-				hasValueExpr := m.Value != nil && *m.Value != ""
-				if hasValueExpr {
+
+				hasForEach := m.ForEach != nil && *m.ForEach != ""
+
+				// The env used to compile value and label expressions: the
+				// item env when forEach is set, the base env otherwise.
+				exprEnv := env
+				if hasForEach {
 					genExprTotal++
-					prog, err := env.Compile(*m.Value)
+					if itemEnvErr != nil {
+						errs = append(errs, CompileError{
+							Policy:    name,
+							Generator: gen.Name,
+							Family:    fam.Name,
+							Kind:      CompileErrorKindForEach,
+							Index:     mi,
+							Err:       itemEnvErr,
+						})
+						continue
+					}
+					exprEnv = itemEnv
+					prog, err := env.Compile(*m.ForEach)
 					if err != nil {
 						errs = append(errs, CompileError{
 							Policy:    name,
 							Generator: gen.Name,
 							Family:    fam.Name,
-							Kind:      "value",
+							Kind:      CompileErrorKindForEach,
+							Index:     mi,
+							Err:       err,
+						})
+						continue
+					}
+					cm.ForEachProgram = prog
+					genExprSuccesses++
+				}
+
+				hasValueExpr := m.Value != nil && *m.Value != ""
+				if hasValueExpr {
+					genExprTotal++
+					prog, err := exprEnv.Compile(*m.Value)
+					if err != nil {
+						errs = append(errs, CompileError{
+							Policy:    name,
+							Generator: gen.Name,
+							Family:    fam.Name,
+							Kind:      CompileErrorKindValue,
 							Index:     mi,
 							Err:       err,
 						})
@@ -71,13 +111,13 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 				}
 				for li, lbl := range m.Labels {
 					genExprTotal++
-					prog, err := env.Compile(lbl.Value)
+					prog, err := exprEnv.Compile(lbl.Value)
 					if err != nil {
 						errs = append(errs, CompileError{
 							Policy:      name,
 							Generator:   gen.Name,
 							Family:      fam.Name,
-							Kind:        "label",
+							Kind:        CompileErrorKindLabel,
 							Index:       li,
 							MetricIndex: mi,
 							Name:        lbl.Name,

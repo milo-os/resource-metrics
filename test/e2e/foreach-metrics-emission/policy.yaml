@@ -1,0 +1,34 @@
+# forEach test policy: emits one series per finalizer on each ConfigMap.
+#
+# ConfigMaps are the target GVR shared with all other e2e tests, so no new
+# RBAC is needed — the aggregation-labels ClusterRole already grants
+# get/list/watch on core/v1 configmaps.
+#
+# object.metadata.finalizers is a []string natively present on every
+# Kubernetes object. By setting two finalizers on the marker ConfigMap we
+# guarantee that the forEach loop produces exactly two series from a single
+# object, which is the key property this test validates.
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-foreach-emission
+spec:
+  generators:
+    - name: configmap-finalizer
+      resource:
+        group: ""
+        version: v1
+        resource: configmaps
+      families:
+        - name: datum_configmap_finalizer
+          help: "One series per finalizer on each ConfigMap (forEach e2e test)."
+          type: gauge
+          metrics:
+            - forEach: "object.metadata.finalizers"
+              labels:
+                - name: name
+                  value: "object.metadata.name"
+                - name: namespace
+                  value: "object.metadata.namespace"
+                - name: finalizer
+                  value: "item"

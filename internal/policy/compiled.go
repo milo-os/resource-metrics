@@ -39,9 +39,12 @@ type CompiledFamily struct {
 
 // CompiledMetric is the compiled form of a MetricSpec.
 // A nil ValueProgram means the metric value is a constant 1.0.
+// A nil ForEachProgram means the metric is emitted once per object (existing
+// behaviour); a non-nil ForEachProgram emits once per element of its result.
 type CompiledMetric struct {
-	ValueProgram cel.Program
-	Labels       []*CompiledLabel
+	ForEachProgram cel.Program
+	ValueProgram   cel.Program
+	Labels         []*CompiledLabel
 }
 
 // CompiledLabel is the compiled form of a LabelSpec.
@@ -50,14 +53,25 @@ type CompiledLabel struct {
 	ValueProgram cel.Program
 }
 
+// CompileErrorKind identifies which expression type failed to compile.
+type CompileErrorKind string
+
+const (
+	CompileErrorKindValue   CompileErrorKind = "value"
+	CompileErrorKindLabel   CompileErrorKind = "label"
+	CompileErrorKindForEach CompileErrorKind = "forEach"
+)
+
 // CompileError describes a single CEL compilation failure in a policy.
-// Kind is "value" or "label". Index identifies which metric within the family
-// (for Kind=="value") or which label within the metric (for Kind=="label").
+// Kind is one of CompileErrorKindValue, CompileErrorKindLabel, or
+// CompileErrorKindForEach. Index identifies which metric within the family
+// (for Kind==CompileErrorKindValue and Kind==CompileErrorKindForEach) or
+// which label within the metric (for Kind==CompileErrorKindLabel).
 type CompileError struct {
 	Policy    types.NamespacedName
 	Generator string
 	Family    string
-	Kind      string
+	Kind      CompileErrorKind
 	// Index is the index of the offending metric within the family
 	// (Kind=="value") or of the offending label within the metric
 	// (Kind=="label"). For label errors it identifies the label position.
@@ -74,11 +88,14 @@ type CompileError struct {
 // Error returns a human-readable description of the compile error.
 func (e CompileError) Error() string {
 	switch e.Kind {
-	case "label":
+	case CompileErrorKindLabel:
 		return fmt.Sprintf("policy %s: generator %q family %q metric[%d] label[%d] %q: %v",
 			e.Policy, e.Generator, e.Family, e.MetricIndex, e.Index, e.Name, e.Err)
-	case "value":
+	case CompileErrorKindValue:
 		return fmt.Sprintf("policy %s: generator %q family %q metric[%d] value: %v",
+			e.Policy, e.Generator, e.Family, e.Index, e.Err)
+	case CompileErrorKindForEach:
+		return fmt.Sprintf("policy %s: generator %q family %q metric[%d] forEach: %v",
 			e.Policy, e.Generator, e.Family, e.Index, e.Err)
 	default:
 		return fmt.Sprintf("policy %s: generator %q family %q: %v",

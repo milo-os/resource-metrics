@@ -20,7 +20,7 @@ func loadSamplePolicy(t *testing.T) *v1alpha1.ResourceMetricsPolicy {
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 	dir := cwd
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		candidate := filepath.Join(dir, "config", "samples",
 			"resourcemetrics_v1alpha1_resourcemetricspolicy.yaml")
 		if _, err := os.Stat(candidate); err == nil {
@@ -44,7 +44,7 @@ func TestCompile_SamplePolicy(t *testing.T) {
 	require.Empty(t, errs, "expected no compile errors")
 	require.NotNil(t, cp)
 	require.Equal(t, "resourcemetricspolicy-sample", cp.Name.Name)
-	require.Len(t, cp.Generators, 2)
+	require.Len(t, cp.Generators, 3)
 
 	// workload-info
 	g0 := cp.Generators[0]
@@ -65,6 +65,15 @@ func TestCompile_SamplePolicy(t *testing.T) {
 	m1 := g1.Families[0].Metrics[0]
 	require.NotNil(t, m1.ValueProgram, "ready-condition metric has an explicit value")
 	require.Len(t, m1.Labels, 3)
+
+	// workload-conditions (forEach)
+	g2 := cp.Generators[2]
+	require.Equal(t, "workload-conditions", g2.Name)
+	require.Len(t, g2.Families, 1)
+	m2 := g2.Families[0].Metrics[0]
+	require.NotNil(t, m2.ForEachProgram, "workload-conditions metric must have a ForEachProgram")
+	require.NotNil(t, m2.ValueProgram, "workload-conditions metric has an explicit value")
+	require.Len(t, m2.Labels, 3)
 }
 
 func TestCompile_BadCELReportsLocation(t *testing.T) {
@@ -94,7 +103,7 @@ func TestCompile_BadCELReportsLocation(t *testing.T) {
 	require.Len(t, errs, 1, "expected exactly one compile error")
 
 	e := errs[0]
-	require.Equal(t, "label", e.Kind)
+	require.Equal(t, policy.CompileErrorKindLabel, e.Kind)
 	require.Equal(t, "gen-x", e.Generator)
 	require.Equal(t, "fam-y", e.Family)
 	require.Equal(t, "lbl-z", e.Name)
@@ -187,10 +196,10 @@ func TestCompile_PartialSuccessOneGeneratorFails(t *testing.T) {
 	var sawValue, sawLabel bool
 	for _, e := range errs {
 		switch e.Kind {
-		case "value":
+		case policy.CompileErrorKindValue:
 			sawValue = true
 			require.Equal(t, 0, e.Index, "value error indexes the metric")
-		case "label":
+		case policy.CompileErrorKindLabel:
 			sawLabel = true
 			require.Equal(t, "broken", e.Name)
 			require.Equal(t, 0, e.MetricIndex)
@@ -216,6 +225,179 @@ func TestCompile_PartialSuccessOneGeneratorFails(t *testing.T) {
 }
 
 func ptrString(s string) *string { return &s }
+
+func TestCompile_ForEach_Valid(t *testing.T) {
+	env := mustEnv(t)
+	forEach := "object.status.conditions"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "foreach-valid"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name: "g",
+		Resource: v1alpha1.ResourceReference{
+			Group: "g", Version: "v", Resource: "rs",
+		},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{{
+				ForEach: &forEach,
+				Labels: []v1alpha1.LabelSpec{
+					{Name: "condition_type", Value: "item.type"},
+				},
+			}},
+		}},
+	}}
+
+	cp, errs := policy.Compile(env, p)
+	require.Empty(t, errs, "expected no compile errors, got %v", errs)
+	require.NotNil(t, cp)
+	m := cp.Generators[0].Families[0].Metrics[0]
+	require.NotNil(t, m.ForEachProgram, "ForEachProgram should be non-nil")
+}
+
+func TestCompile_ForEach_InvalidCEL(t *testing.T) {
+	env := mustEnv(t)
+	badForEach := "??? not valid"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "foreach-bad"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name: "g",
+		Resource: v1alpha1.ResourceReference{
+			Group: "g", Version: "v", Resource: "rs",
+		},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{{
+				ForEach: &badForEach,
+			}},
+		}},
+	}}
+
+	_, errs := policy.Compile(env, p)
+	require.NotEmpty(t, errs)
+	require.Equal(t, policy.CompileErrorKindForEach, errs[0].Kind)
+}
+
+// TestCompile_ForEach_ErrorIncludesMetricIndex verifies that a forEach compile
+// error formats with the metric index so operators can locate the bad expression.
+func TestCompile_ForEach_ErrorIncludesMetricIndex(t *testing.T) {
+	env := mustEnv(t)
+	good := "object.metadata.name"
+	bad := "??? not valid forEach"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "foreach-index"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name: "gen",
+		Resource: v1alpha1.ResourceReference{
+			Group: "g", Version: "v", Resource: "rs",
+		},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "fam",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{
+				// metric[0]: valid (no forEach)
+				{Labels: []v1alpha1.LabelSpec{{Name: "name", Value: good}}},
+				// metric[1]: bad forEach — error must reference index 1
+				{ForEach: &bad},
+			},
+		}},
+	}}
+
+	_, errs := policy.Compile(env, p)
+	require.NotEmpty(t, errs)
+
+	var found bool
+	var forEachErr policy.CompileError
+	for _, e := range errs {
+		if e.Kind == policy.CompileErrorKindForEach {
+			forEachErr = e
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected a forEach compile error")
+	require.Equal(t, 1, forEachErr.Index, "Index must be 1 (second metric in the family)")
+	require.Contains(t, forEachErr.Error(), "metric[1]",
+		"Error() must include the metric index for forEach errors")
+}
+
+func TestCompile_NoForEach_ForEachProgramIsNil(t *testing.T) {
+	env := mustEnv(t)
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "no-foreach"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name: "g",
+		Resource: v1alpha1.ResourceReference{
+			Group: "g", Version: "v", Resource: "rs",
+		},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{{
+				Labels: []v1alpha1.LabelSpec{
+					{Name: "name", Value: "object.metadata.name"},
+				},
+			}},
+		}},
+	}}
+
+	cp, errs := policy.Compile(env, p)
+	require.Empty(t, errs)
+	m := cp.Generators[0].Families[0].Metrics[0]
+	require.Nil(t, m.ForEachProgram, "ForEachProgram must be nil when forEach is absent")
+}
+
+func TestCompile_NoForEach_ItemReferenceInLabelFails(t *testing.T) {
+	env := mustEnv(t)
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "no-foreach-item-ref"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name: "g",
+		Resource: v1alpha1.ResourceReference{
+			Group: "g", Version: "v", Resource: "rs",
+		},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{{
+				Labels: []v1alpha1.LabelSpec{
+					// "item" is not declared in the base env, so this must fail.
+					{Name: "t", Value: "item.type"},
+				},
+			}},
+		}},
+	}}
+
+	_, errs := policy.Compile(env, p)
+	require.NotEmpty(t, errs, "referencing 'item' without forEach must produce a compile error")
+	require.Equal(t, policy.CompileErrorKindLabel, errs[0].Kind)
+}
+
+func TestCompile_NoForEach_ItemReferenceInValueFails(t *testing.T) {
+	env := mustEnv(t)
+	itemValue := "item.count"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "no-foreach-item-ref-value"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name: "g",
+		Resource: v1alpha1.ResourceReference{
+			Group: "g", Version: "v", Resource: "rs",
+		},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{{
+				// "item" is not declared in the base env, so this must fail.
+				Value: &itemValue,
+			}},
+		}},
+	}}
+
+	_, errs := policy.Compile(env, p)
+	require.NotEmpty(t, errs, "referencing 'item' in value without forEach must produce a compile error")
+	require.Equal(t, policy.CompileErrorKindValue, errs[0].Kind)
+}
 
 func TestRegistry_UpsertSnapshotDelete(t *testing.T) {
 	env := mustEnv(t)

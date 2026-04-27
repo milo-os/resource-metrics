@@ -2,8 +2,8 @@ resources:
 - manager.yaml
 kind: Kustomization
 images:
-- name: ghcr.io/datum-cloud/resource-metrics
-  newName: ghcr.io/datum-cloud/resource-metrics
+- name: ghcr.io/milo-os/resource-metrics
+  newName: ghcr.io/milo-os/resource-metrics
   newTag: latest
 
 configMapGenerator:
