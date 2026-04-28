@@ -284,10 +284,14 @@ func (c *ControlPlaneCollector) reconcile() {
 	for _, gvr := range toAdd {
 		entry := c.startInformer(ctx, gvr)
 		if entry == nil {
-			// startInformer reported a cache-sync failure and already
-			// cancelled the informer goroutine. Do not record the entry;
-			// the next reconcile will re-attempt because the GVR is still
-			// desired — that's the intended backoff.
+			// startInformer returned nil for one of three reasons:
+			//   1. The GVR is not registered on this control plane (REST
+			//      mapper no-match) — will retry on the next wake.
+			//   2. The informer cache timed out syncing — transient; retry.
+			//   3. A probe-list after sync failure returned a transient
+			//      error — retry.
+			// In all cases the GVR stays desired, so the next reconcile
+			// will re-attempt. Do not record the entry.
 			continue
 		}
 		c.mu.Lock()
@@ -324,10 +328,17 @@ func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema
 	// root-cluster-only type queried against a project CP). Return nil so the
 	// GVR stays in the desired set and is retried on the next reconcile — no
 	// RBAC denial counter increment, no denied entry in the status.
+	//
+	// Non-NoMatch errors (e.g. a transient discovery refresh failure) are
+	// logged and fall through so the existing SSAR + probe path can classify
+	// the failure independently.
 	if c.restMapper != nil {
-		if _, err := c.restMapper.KindsFor(gvr); meta.IsNoMatchError(err) {
-			log.V(2).Info("GVR not registered on this control plane; deferring until next reconcile")
-			return nil
+		if _, err := c.restMapper.KindsFor(gvr); err != nil {
+			if meta.IsNoMatchError(err) {
+				log.V(2).Info("GVR not registered on this control plane; deferring until next reconcile")
+				return nil
+			}
+			log.V(1).Info("REST mapper lookup failed; proceeding with preflight", "error", err)
 		}
 	}
 
