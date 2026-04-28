@@ -87,7 +87,7 @@ func makePolicy(name string, gvrs ...schema.GroupVersionResource) *v1alpha1.Reso
 	}
 }
 
-func newTestCollector(t *testing.T) (*ProjectCollector, *policy.Registry) {
+func newTestCollector(t *testing.T) (*ControlPlaneCollector, *policy.Registry) {
 	t.Helper()
 
 	env, err := policy.NewEnv()
@@ -97,7 +97,7 @@ func newTestCollector(t *testing.T) (*ProjectCollector, *policy.Registry) {
 	dynClient := fakeDynamicClientWithLists()
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Hour)
 
-	pc := newProjectCollectorForTesting(
+	pc := newControlPlaneCollectorForTesting(
 		"test",
 		dynClient,
 		factory,
@@ -202,7 +202,7 @@ func TestReconcile_RemovesEntryAfterCacheSyncFailure(t *testing.T) {
 
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Hour)
 
-	pc := newProjectCollectorForTesting(
+	pc := newControlPlaneCollectorForTesting(
 		"test",
 		dynClient,
 		factory,

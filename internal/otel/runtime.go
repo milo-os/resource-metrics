@@ -46,13 +46,13 @@ const projectUpMetricName = "resource_metrics_project_up"
 // and the canonical project identifier.
 const projectAttrKey = "milo.project.name"
 
-// CollectorView is the read-only slice of ProjectCollector behaviour the
+// CollectorView is the read-only slice of ControlPlaneCollector behaviour the
 // OTel runtime depends on. Exposed as an interface so tests can supply a
 // fake without standing up a real dynamic informer tree.
 //
-// The real *collector.ProjectCollector satisfies this interface directly.
+// The real *collector.ControlPlaneCollector satisfies this interface directly.
 type CollectorView interface {
-	Status() collector.ProjectStatus
+	Status() collector.ControlPlaneStatus
 	Collect() []collector.CollectedObjects
 }
 
@@ -64,7 +64,7 @@ type CollectorSource interface {
 }
 
 // clusterManagerAdapter wraps a *collector.ClusterManager to widen its
-// concrete []*ProjectCollector return into the []CollectorView form the
+// concrete []*ControlPlaneCollector return into the []CollectorView form the
 // runtime consumes. This avoids touching the collector package.
 type clusterManagerAdapter struct {
 	inner *collector.ClusterManager
@@ -100,7 +100,7 @@ type familyEntry struct {
 }
 
 // Runtime ties the MeterProvider, the policy Registry, and the set of
-// engaged ProjectCollectors together. It owns the per-family instruments
+// engaged ControlPlaneCollectors together. It owns the per-family instruments
 // and their per-family OTel callbacks, and exposes a single Sync() entry
 // point that the policy reconciler calls after registry mutations.
 type Runtime struct {
@@ -340,7 +340,7 @@ func (r *Runtime) observeProjectUp(_ context.Context, observer metric.Observer) 
 	for _, c := range r.manager.Collectors() {
 		status := c.Status()
 		var v float64
-		if status.ProjectUp {
+		if status.ControlPlaneUp {
 			v = 1.0
 		}
 		observer.ObserveFloat64(r.projectUp, v,
@@ -377,7 +377,7 @@ func (r *Runtime) observeFamily(_ context.Context, observer metric.Observer, eff
 		// this collector. This is the documented "suppress on CP down"
 		// rule: we never emit synthetic zeroes; we simply omit series
 		// so downstream alerts can fire on the up/down gauge alone.
-		if !status.ProjectUp {
+		if !status.ControlPlaneUp {
 			continue
 		}
 

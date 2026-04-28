@@ -298,6 +298,22 @@ func (p *wrappedSingleClusterProvider) Run(ctx context.Context, mgr mcmanager.Ma
 	return p.Provider.(runnableProvider).Run(ctx, mgr)
 }
 
+// rootClusterEngager engages the root/management cluster before delegating
+// to the underlying provider's Run. Used in Milo mode when
+// CollectRootControlPlane is enabled to also collect metrics from the
+// cluster where project discovery runs.
+type rootClusterEngager struct {
+	runnableProvider
+	rootCluster cluster.Cluster
+}
+
+func (r *rootClusterEngager) Run(ctx context.Context, mgr mcmanager.Manager) error {
+	if err := mgr.Engage(ctx, "root", r.rootCluster); err != nil {
+		return err
+	}
+	return r.runnableProvider.Run(ctx, mgr)
+}
+
 // engageInterceptor wraps an mcmanager.Manager and forwards every Engage call
 // to both the underlying manager and a ClusterManager. This is how we hook
 // per-cluster collector creation without modifying upstream providers.
@@ -381,7 +397,18 @@ func initializeClusterDiscovery(
 			return nil, nil, fmt.Errorf("unable to create milo provider: %w", err)
 		}
 
-		provider = miloProvider
+		var rp runnableProvider = miloProvider
+		if serverConfig.Discovery.CollectRootControlPlane {
+			rootCluster, err := cluster.New(discoveryRestConfig, func(o *cluster.Options) {
+				o.Scheme = scheme
+			})
+			if err != nil {
+				return nil, nil, fmt.Errorf("creating root control plane cluster: %w", err)
+			}
+			runnables = append(runnables, rootCluster)
+			rp = &rootClusterEngager{runnableProvider: miloProvider, rootCluster: rootCluster}
+		}
+		provider = rp
 		runnables = append(runnables, discoveryManager)
 
 	default:

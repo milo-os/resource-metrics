@@ -14,12 +14,12 @@ import (
 	"go.datum.net/resource-metrics/internal/policy"
 )
 
-// ClusterManager owns the set of per-project ProjectCollectors. It is driven
+// ClusterManager owns the set of ControlPlaneCollectors. It is driven
 // by multicluster-runtime Engage / Disengage events and by the policy
 // reconciler (via WakeAll on registry changes).
 type ClusterManager struct {
 	mu         sync.RWMutex
-	collectors map[string]*ProjectCollector
+	collectors map[string]*ControlPlaneCollector
 	registry   *policy.Registry
 	logger     logr.Logger
 }
@@ -28,14 +28,14 @@ type ClusterManager struct {
 // callbacks. It does not start anything on its own.
 func NewClusterManager(registry *policy.Registry, logger logr.Logger) *ClusterManager {
 	return &ClusterManager{
-		collectors: make(map[string]*ProjectCollector),
+		collectors: make(map[string]*ControlPlaneCollector),
 		registry:   registry,
 		logger:     logger.WithName("collector-manager"),
 	}
 }
 
-// Engage is called when a project control plane becomes ready. It creates a
-// ProjectCollector, stores it, starts it, and wakes it once so the initial
+// Engage is called when a control plane becomes ready. It creates a
+// ControlPlaneCollector, stores it, starts it, and wakes it once so the initial
 // reconcile picks up the current registry snapshot.
 //
 // The signature matches multicluster.Aware.Engage so a thin adapter in
@@ -52,7 +52,7 @@ func (m *ClusterManager) Engage(ctx context.Context, clusterName string, cl clus
 	}
 	m.mu.Unlock()
 
-	pc, err := NewProjectCollector(cl, clusterName, m.registry, m.logger)
+	pc, err := NewControlPlaneCollector(cl, clusterName, m.registry, m.logger)
 	if err != nil {
 		return fmt.Errorf("collector manager: engage %q: %w", clusterName, err)
 	}
@@ -112,11 +112,11 @@ func (m *ClusterManager) WakeAll() {
 }
 
 // Collectors returns a snapshot slice of the currently engaged
-// ProjectCollectors. Iteration is safe without additional locking.
-func (m *ClusterManager) Collectors() []*ProjectCollector {
+// ControlPlaneCollectors. Iteration is safe without additional locking.
+func (m *ClusterManager) Collectors() []*ControlPlaneCollector {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]*ProjectCollector, 0, len(m.collectors))
+	out := make([]*ControlPlaneCollector, 0, len(m.collectors))
 	for _, pc := range m.collectors {
 		out = append(out, pc)
 	}
@@ -124,7 +124,7 @@ func (m *ClusterManager) Collectors() []*ProjectCollector {
 }
 
 // Get returns the collector for a cluster, or nil if not engaged.
-func (m *ClusterManager) Get(clusterName string) *ProjectCollector {
+func (m *ClusterManager) Get(clusterName string) *ControlPlaneCollector {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.collectors[clusterName]

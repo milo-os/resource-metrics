@@ -20,7 +20,7 @@ import (
 //
 // TODO: an end-to-end envtest that simulates a denial via a fake
 // ClusterManager would exercise the reconcile-status writeback path too, but
-// the current ClusterManager/ProjectCollector concrete types aren't easy to
+// the current ClusterManager/ControlPlaneCollector concrete types aren't easy to
 // stub without a larger refactor — see the package comment on collector.go.
 
 func TestAggregateMissingPermissions_FiltersToReferencedGVRs(t *testing.T) {
@@ -34,7 +34,7 @@ func TestAggregateMissingPermissions_FiltersToReferencedGVRs(t *testing.T) {
 		},
 	}}
 
-	statuses := []collector.ProjectStatus{{
+	statuses := []collector.ControlPlaneStatus{{
 		ClusterName: "proj-a",
 		GVRStatuses: map[schema.GroupVersionResource]collector.GVRStatus{
 			referenced:   {Denied: true},
@@ -57,7 +57,7 @@ func TestAggregateMissingPermissions_DedupesAcrossProjects(t *testing.T) {
 		Resource: resourcemetricsv1alpha1.ResourceReference{Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource},
 	}}
 
-	statuses := []collector.ProjectStatus{
+	statuses := []collector.ControlPlaneStatus{
 		{
 			ClusterName: "proj-a",
 			GVRStatuses: map[schema.GroupVersionResource]collector.GVRStatus{gvr: {Denied: true}},
@@ -92,7 +92,7 @@ func TestAggregateMissingPermissions_SortsDeterministically(t *testing.T) {
 		{Name: "gd", Resource: toRef(d)},
 	}
 
-	statuses := []collector.ProjectStatus{{
+	statuses := []collector.ControlPlaneStatus{{
 		ClusterName: "proj",
 		GVRStatuses: map[schema.GroupVersionResource]collector.GVRStatus{
 			c: {Denied: true},
@@ -131,7 +131,7 @@ func TestAggregateMissingPermissions_IgnoresUndeniedStatuses(t *testing.T) {
 		Resource: resourcemetricsv1alpha1.ResourceReference{Group: gvr.Group, Version: gvr.Version, Resource: gvr.Resource},
 	}}
 
-	statuses := []collector.ProjectStatus{{
+	statuses := []collector.ControlPlaneStatus{{
 		ClusterName: "proj-ok",
 		GVRStatuses: map[schema.GroupVersionResource]collector.GVRStatus{
 			gvr: {Synced: true, Denied: false},
@@ -144,7 +144,7 @@ func TestAggregateMissingPermissions_IgnoresUndeniedStatuses(t *testing.T) {
 
 func TestAggregateMissingPermissions_EmptyInputs(t *testing.T) {
 	// No generators -> no output.
-	require.Empty(t, aggregateMissingPermissions(nil, []collector.ProjectStatus{{
+	require.Empty(t, aggregateMissingPermissions(nil, []collector.ControlPlaneStatus{{
 		ClusterName: "proj", GVRStatuses: map[schema.GroupVersionResource]collector.GVRStatus{
 			{Group: "g", Version: "v", Resource: "r"}: {Denied: true},
 		},

@@ -17,7 +17,7 @@ import (
 // Attempting to stub a cluster.Cluster here is more work than it saves: the
 // only consumer of the fake would be the ClusterManager.Engage happy path,
 // which is already exercised end-to-end by the reconcile_test.go via
-// newProjectCollectorForTesting.
+// newControlPlaneCollectorForTesting.
 func TestClusterManager_BasicLifecycle(t *testing.T) {
 	env, err := policy.NewEnv()
 	require.NoError(t, err)
