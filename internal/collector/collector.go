@@ -319,6 +319,18 @@ func (c *ControlPlaneCollector) reconcile() {
 func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema.GroupVersionResource) *gvrInformer {
 	log := c.logger.WithValues("gvr", gvr.String())
 
+	// Check the REST mapper before doing any network round-trips. A no-match
+	// means the CRD is simply not installed on this control plane (e.g. a
+	// root-cluster-only type queried against a project CP). Return nil so the
+	// GVR stays in the desired set and is retried on the next reconcile — no
+	// RBAC denial counter increment, no denied entry in the status.
+	if c.restMapper != nil {
+		if _, err := c.restMapper.KindsFor(gvr); meta.IsNoMatchError(err) {
+			log.V(2).Info("GVR not registered on this control plane; deferring until next reconcile")
+			return nil
+		}
+	}
+
 	allowed, ssarErr := c.preflight(parent, gvr)
 	if ssarErr != nil {
 		log.Info("ssar preflight failed", "error", ssarErr.Error())
