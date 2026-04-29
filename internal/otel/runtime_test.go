@@ -235,8 +235,8 @@ func TestRuntime_SyncRegistersFamilyGauges(t *testing.T) {
 }
 
 // TestRuntime_SuppressesSeriesWhenProjectDown verifies the documented
-// suppression rule: if a project collector reports ControlPlaneUp=false, no
-// per-family series are emitted for that project (project_up still is).
+// suppression rule: if a control plane collector reports ControlPlaneUp=false,
+// no per-family series are emitted for that control plane (project_up still is).
 func TestRuntime_SuppressesSeriesWhenProjectDown(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{

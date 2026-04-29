@@ -46,6 +46,10 @@ const projectUpMetricName = "resource_metrics_project_up"
 // and the canonical project identifier.
 const projectAttrKey = "milo.project.name"
 
+// controlPlaneTypeAttrKey is the attribute key used on every emitted series
+// to distinguish root control plane metrics from per-project metrics.
+const controlPlaneTypeAttrKey = "milo.control_plane.type"
+
 // CollectorView is the read-only slice of ControlPlaneCollector behaviour the
 // OTel runtime depends on. Exposed as an interface so tests can supply a
 // fake without standing up a real dynamic informer tree.
@@ -56,7 +60,7 @@ type CollectorView interface {
 	Collect() []collector.CollectedObjects
 }
 
-// CollectorSource yields the current set of engaged project collectors.
+// CollectorSource yields the current set of engaged control plane collectors.
 // The real *collector.ClusterManager satisfies this interface directly via
 // its Collectors() method; tests inject fakes.
 type CollectorSource interface {
@@ -184,7 +188,7 @@ func NewRuntime(mp *sdkmetric.MeterProvider, registry *policy.Registry, manager 
 
 	projectUp, err := meter.Float64ObservableGauge(
 		projectUpMetricName,
-		metric.WithDescription("1 when the project control plane is reachable and informers are synced, 0 otherwise."),
+		metric.WithDescription("1 when the control plane is reachable and informers are synced, 0 otherwise."),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("otel runtime: create %s gauge: %w", projectUpMetricName, err)
@@ -344,7 +348,10 @@ func (r *Runtime) observeProjectUp(_ context.Context, observer metric.Observer) 
 			v = 1.0
 		}
 		observer.ObserveFloat64(r.projectUp, v,
-			metric.WithAttributes(attribute.String(projectAttrKey, strings.TrimPrefix(status.ClusterName, "/"))),
+			metric.WithAttributes(
+				attribute.String(projectAttrKey, strings.TrimPrefix(status.ClusterName, "/")),
+				attribute.String(controlPlaneTypeAttrKey, controlPlaneType(status.ClusterName)),
+			),
 		)
 	}
 	return nil
@@ -362,7 +369,7 @@ func (r *Runtime) observeFamily(_ context.Context, observer metric.Observer, eff
 	policies := r.registry.Snapshot()
 	collectors := r.manager.Collectors()
 
-	// One budget per callback invocation, shared across every (project,
+	// One budget per callback invocation, shared across every (control-plane,
 	// policy, generator) tuple contributing to this family. A pathological
 	// combination that would otherwise wedge the scrape goroutine short-
 	// circuits below with a single V(1) log and a counter bump.
@@ -373,7 +380,7 @@ func (r *Runtime) observeFamily(_ context.Context, observer metric.Observer, eff
 	type cacheKey struct{ group, version, resource string }
 	for _, c := range collectors {
 		status := c.Status()
-		// If the project CP is unreachable, suppress every series for
+		// If the control plane is unreachable, suppress every series for
 		// this collector. This is the documented "suppress on CP down"
 		// rule: we never emit synthetic zeroes; we simply omit series
 		// so downstream alerts can fire on the up/down gauge alone.
@@ -465,20 +472,32 @@ func (r *Runtime) observeFamily(_ context.Context, observer metric.Observer, eff
 	}
 }
 
-// attrsFor builds the OTel attribute set for one Measurement: the project
-// identity plus every LabelPair from the measurement rendered as a string
-// attribute.
+// attrsFor builds the OTel attribute set for one Measurement: the cluster
+// identity, the control plane type, plus every LabelPair from the measurement
+// rendered as a string attribute.
 //
 // projectUID is deliberately not included: the multicluster-runtime
 // cluster.Cluster interface does not expose the Milo project UID today
 // (see runtime_test.go and the Phase 4 report for the deferred follow-up).
-func attrsFor(m metrics.Measurement, projectName string) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 1+len(m.Labels))
-	attrs = append(attrs, attribute.String(projectAttrKey, strings.TrimPrefix(projectName, "/")))
+func attrsFor(m metrics.Measurement, clusterName string) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 2+len(m.Labels))
+	attrs = append(attrs,
+		attribute.String(projectAttrKey, strings.TrimPrefix(clusterName, "/")),
+		attribute.String(controlPlaneTypeAttrKey, controlPlaneType(clusterName)),
+	)
 	for _, lp := range m.Labels {
 		attrs = append(attrs, attribute.String(lp.Name, lp.Value))
 	}
 	return attrs
+}
+
+// controlPlaneType returns "root" for the special root cluster and "project"
+// for all project control planes.
+func controlPlaneType(clusterName string) string {
+	if clusterName == "root" {
+		return "root"
+	}
+	return "project"
 }
 
 // Shutdown unregisters every callback the Runtime has registered. The
