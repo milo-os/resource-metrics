@@ -23,6 +23,7 @@ discovery:
   # nothing.
   discoveryKubeconfigPath: /etc/milo/kubeconfig
   projectKubeconfigPath: /etc/milo/kubeconfig
+  collectRootControlPlane: true
 otel:
   # test-infra's install-otel-collector task deploys an OpenTelemetryCollector
   # CR named `otel-collector` in namespace `otel-collector-system`. The OTel

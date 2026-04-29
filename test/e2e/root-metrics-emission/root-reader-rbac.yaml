@@ -1,0 +1,35 @@
+# Grants the resource-metrics operator list+watch on Organization resources
+# on the management (root) cluster. This is required when
+# collectRootControlPlane: true so that the SSAR preflight succeeds and the
+# informer can sync. Without this the policy will surface PermissionDenied=True
+# for organizations.resourcemanager.miloapis.com.
+#
+# The operator's ServiceAccount is resource-metrics-controller-manager in
+# namespace resource-metrics-system (default kustomize namePrefix + namespace).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resource-metrics-root-organization-reader
+rules:
+  - apiGroups:
+      - resourcemanager.miloapis.com
+    resources:
+      - organizations
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: resource-metrics-root-organization-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: resource-metrics-root-organization-reader
+subjects:
+  - kind: ServiceAccount
+    name: resource-metrics-controller-manager
+    namespace: resource-metrics-system
