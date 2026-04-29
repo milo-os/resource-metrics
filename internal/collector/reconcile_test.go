@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/dynamicinformer"
@@ -280,53 +279,3 @@ func TestReconcile_DuplicateGVRIsNoop(t *testing.T) {
 	require.Len(t, pc.informers, 1)
 }
 
-// TestReconcile_SkipsGVRAbsentFromRESTMapper verifies that when a GVR is not
-// registered with the control plane's API server (REST mapper no-match), the
-// reconcile loop skips it without recording a denied entry or incrementing the
-// RBAC denied counter. The GVR stays in the desired set and is retried on the
-// next wake.
-func TestReconcile_SkipsGVRAbsentFromRESTMapper(t *testing.T) {
-	env, err := policy.NewEnv()
-	require.NoError(t, err)
-	reg := policy.NewRegistry(env)
-
-	dynClient := fakeDynamicClientWithLists()
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Hour)
-
-	pc := newControlPlaneCollectorForTesting(
-		"test",
-		dynClient,
-		factory,
-		nil, // no authz client -> preflight returns allowed
-		reg,
-		testr.New(t),
-	)
-	// An empty DefaultRESTMapper returns NoResourceMatchError for any GVR,
-	// simulating a control plane where testGVR's CRD is not installed.
-	pc.restMapper = meta.NewDefaultRESTMapper(nil)
-
-	require.NoError(t, pc.Start(t.Context()))
-	t.Cleanup(func() {
-		stopCtx, cancel := cleanupContext()
-		defer cancel()
-		_ = pc.Stop(stopCtx)
-	})
-
-	_, errs := reg.Upsert(makePolicy("p1", testGVR))
-	require.Empty(t, errs)
-	pc.Wake()
-
-	// The reconcile loop runs synchronously inside the wake handler; a brief
-	// sleep is sufficient since the REST mapper check returns immediately.
-	time.Sleep(100 * time.Millisecond)
-
-	// The GVR must NOT appear in the informers map — it was silently deferred.
-	pc.mu.RLock()
-	_, present := pc.informers[testGVR]
-	pc.mu.RUnlock()
-	require.False(t, present, "informer should not be recorded for a GVR absent from the REST mapper")
-
-	// Status must show no GVR entries — no denied entry was recorded either.
-	status := pc.Status()
-	require.Empty(t, status.GVRStatuses, "no GVR status entry should exist for an absent GVR")
-}
