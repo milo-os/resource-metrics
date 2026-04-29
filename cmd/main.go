@@ -115,7 +115,7 @@ func main() {
 	}
 
 	// Build the CEL environment and the policy registry shared between the
-	// ResourceMetricsPolicy reconciler and the per-project collectors.
+	// ResourceMetricsPolicy reconciler and the per-control-plane collectors.
 	celEnv, err := policy.NewEnv()
 	if err != nil {
 		setupLog.Error(err, "unable to build cel environment")
@@ -287,7 +287,7 @@ type runnableProvider interface {
 //
 //	See: https://github.com/kubernetes-sigs/multicluster-runtime/pull/18
 type wrappedSingleClusterProvider struct {
-	multicluster.Provider
+	runnableProvider
 	cluster cluster.Cluster
 }
 
@@ -295,7 +295,7 @@ func (p *wrappedSingleClusterProvider) Run(ctx context.Context, mgr mcmanager.Ma
 	if err := mgr.Engage(ctx, "single", p.cluster); err != nil {
 		return err
 	}
-	return p.Provider.(runnableProvider).Run(ctx, mgr)
+	return p.runnableProvider.Run(ctx, mgr)
 }
 
 // rootClusterEngager engages the root/management cluster before delegating
@@ -314,6 +314,16 @@ func (r *rootClusterEngager) Run(ctx context.Context, mgr mcmanager.Manager) err
 	return r.runnableProvider.Run(ctx, mgr)
 }
 
+// Get overrides the embedded provider so that the "root" cluster name resolves
+// to the root control plane instead of returning ErrClusterNotFound from the
+// underlying Milo provider, which is unaware of the pre-engaged root cluster.
+func (r *rootClusterEngager) Get(ctx context.Context, clusterName string) (cluster.Cluster, error) {
+	if clusterName == "root" {
+		return r.rootCluster, nil
+	}
+	return r.runnableProvider.Get(ctx, clusterName)
+}
+
 // engageInterceptor wraps an mcmanager.Manager and forwards every Engage call
 // to both the underlying manager and a ClusterManager. This is how we hook
 // per-cluster collector creation without modifying upstream providers.
@@ -322,9 +332,9 @@ type engageInterceptor struct {
 	clusterManager *collector.ClusterManager
 }
 
-// Engage is called by the provider when a project control plane becomes
-// ready. We engage the ClusterManager first; if that fails we do not engage
-// the underlying manager so the provider sees the failure atomically.
+// Engage is called by the provider when a control plane becomes ready. We
+// engage the ClusterManager first; if that fails we do not engage the
+// underlying manager so the provider sees the failure atomically.
 func (i *engageInterceptor) Engage(ctx context.Context, name string, cl cluster.Cluster) error {
 	if err := i.clusterManager.Engage(ctx, name, cl); err != nil {
 		return err
@@ -356,6 +366,9 @@ func initializeClusterDiscovery(
 	switch serverConfig.Discovery.Mode {
 	case milomulticluster.ProviderSingle:
 		// In single mode the operator manages exactly one cluster — itself.
+		if serverConfig.Discovery.CollectRootControlPlane {
+			setupLog.Info("WARNING: collectRootControlPlane has no effect in single discovery mode")
+		}
 		deploymentCluster, err := cluster.New(ctrl.GetConfigOrDie(), func(o *cluster.Options) {
 			o.Scheme = scheme
 		})
@@ -364,8 +377,8 @@ func initializeClusterDiscovery(
 		}
 		runnables = append(runnables, deploymentCluster)
 		provider = &wrappedSingleClusterProvider{
-			Provider: mcsingle.New("single", deploymentCluster),
-			cluster:  deploymentCluster,
+			runnableProvider: mcsingle.New("single", deploymentCluster),
+			cluster:          deploymentCluster,
 		}
 
 	case milomulticluster.ProviderMilo:
@@ -399,6 +412,7 @@ func initializeClusterDiscovery(
 
 		var rp runnableProvider = miloProvider
 		if serverConfig.Discovery.CollectRootControlPlane {
+			setupLog.Info("root control plane collection enabled; engaging root cluster as \"root\"")
 			rootCluster, err := cluster.New(discoveryRestConfig, func(o *cluster.Options) {
 				o.Scheme = scheme
 			})
