@@ -144,7 +144,7 @@ func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcr
 		}
 	}
 
-	// Aggregate denied GVRs across every engaged project, filtered to those
+	// Aggregate denied GVRs across every engaged control plane, filtered to those
 	// this policy actually references. The pure helper below lets us unit-test
 	// the aggregation logic without standing up a ClusterManager.
 	projectStatuses := make([]collector.ControlPlaneStatus, 0, len(r.ClusterManager.Collectors()))
@@ -256,7 +256,7 @@ func reasonForPermissionDenied(active bool) string {
 
 func messageForPermissionDenied(missing []resourcemetricsv1alpha1.GVRRef) string {
 	if len(missing) == 0 {
-		return "All referenced GVRs are authorized on every engaged project."
+		return "All referenced GVRs are authorized on every engaged control plane."
 	}
 	n := min(len(missing), 3)
 	parts := make([]string, 0, n)
@@ -323,7 +323,7 @@ func messageForReady(ready bool, active int32) string {
 }
 
 // aggregateMissingPermissions returns the deduplicated, sorted list of GVRs
-// referenced by the given generator specs for which at least one project's
+// referenced by the given generator specs for which at least one control plane's
 // informer has observed an RBAC denial. Unreferenced GVRs are filtered out so
 // status only surfaces denials the operator can act on. The result is
 // deterministic (sorted by group, version, resource) so that repeated

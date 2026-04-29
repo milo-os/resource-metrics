@@ -92,7 +92,7 @@ type ControlPlaneCollector struct {
 	// lifetime of the collector — we do NOT stop it when policies stop
 	// referencing the GVR (the informer is shared across reconciles and
 	// can't be re-Run after a stop). This is bounded by the universe of
-	// GVRs ever requested on this project, which is small.
+	// GVRs ever requested on this control plane, which is small.
 	startedInformers map[schema.GroupVersionResource]struct{}
 
 	registry *policy.Registry
