@@ -56,9 +56,9 @@ type GVRStatus struct {
 // ControlPlaneStatus summarises a ControlPlaneCollector for the health endpoint and
 // OTel up/down emitter.
 type ControlPlaneStatus struct {
-	ClusterName      string
-	ControlPlaneUp   bool
-	GVRStatuses      map[schema.GroupVersionResource]GVRStatus
+	ClusterName    string
+	ControlPlaneUp bool
+	GVRStatuses    map[schema.GroupVersionResource]GVRStatus
 }
 
 // gvrInformer tracks everything we need to know about one running informer.

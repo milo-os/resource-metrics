@@ -278,4 +278,3 @@ func TestReconcile_DuplicateGVRIsNoop(t *testing.T) {
 	require.Same(t, first, second, "informer entry should not be replaced on duplicate reconcile")
 	require.Len(t, pc.informers, 1)
 }
-

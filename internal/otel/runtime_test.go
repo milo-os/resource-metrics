@@ -27,7 +27,7 @@ type fakeCollector struct {
 	objects []collector.CollectedObjects
 }
 
-func (f *fakeCollector) Status() collector.ControlPlaneStatus       { return f.status }
+func (f *fakeCollector) Status() collector.ControlPlaneStatus  { return f.status }
 func (f *fakeCollector) Collect() []collector.CollectedObjects { return f.objects }
 
 // fakeSource is a CollectorSource backed by a static slice of fakes.
@@ -173,8 +173,8 @@ func TestRuntime_SyncRegistersFamilyGauges(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
 			status: collector.ControlPlaneStatus{
-				ClusterName: "proj-alpha",
-				ControlPlaneUp:   true,
+				ClusterName:    "proj-alpha",
+				ControlPlaneUp: true,
 			},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
@@ -241,8 +241,8 @@ func TestRuntime_SuppressesSeriesWhenProjectDown(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
 			status: collector.ControlPlaneStatus{
-				ClusterName: "proj-down",
-				ControlPlaneUp:   false,
+				ClusterName:    "proj-down",
+				ControlPlaneUp: false,
 			},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
@@ -425,8 +425,8 @@ func TestRuntime_CycleBudgetShortCircuits(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
 			status: collector.ControlPlaneStatus{
-				ClusterName: "proj-alpha",
-				ControlPlaneUp:   true,
+				ClusterName:    "proj-alpha",
+				ControlPlaneUp: true,
 			},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
