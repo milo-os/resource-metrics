@@ -23,11 +23,11 @@ import (
 // object lists. It lets the OTel runtime exercise its callback logic
 // without a live dynamic informer tree.
 type fakeCollector struct {
-	status  collector.ProjectStatus
+	status  collector.ControlPlaneStatus
 	objects []collector.CollectedObjects
 }
 
-func (f *fakeCollector) Status() collector.ProjectStatus       { return f.status }
+func (f *fakeCollector) Status() collector.ControlPlaneStatus  { return f.status }
 func (f *fakeCollector) Collect() []collector.CollectedObjects { return f.objects }
 
 // fakeSource is a CollectorSource backed by a static slice of fakes.
@@ -172,9 +172,9 @@ func workloadObject(name string, replicas int64) map[string]any {
 func TestRuntime_SyncRegistersFamilyGauges(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
-			status: collector.ProjectStatus{
-				ClusterName: "proj-alpha",
-				ProjectUp:   true,
+			status: collector.ControlPlaneStatus{
+				ClusterName:    "proj-alpha",
+				ControlPlaneUp: true,
 			},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
@@ -235,14 +235,14 @@ func TestRuntime_SyncRegistersFamilyGauges(t *testing.T) {
 }
 
 // TestRuntime_SuppressesSeriesWhenProjectDown verifies the documented
-// suppression rule: if a project collector reports ProjectUp=false, no
-// per-family series are emitted for that project (project_up still is).
+// suppression rule: if a control plane collector reports ControlPlaneUp=false,
+// no per-family series are emitted for that control plane (project_up still is).
 func TestRuntime_SuppressesSeriesWhenProjectDown(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
-			status: collector.ProjectStatus{
-				ClusterName: "proj-down",
-				ProjectUp:   false,
+			status: collector.ControlPlaneStatus{
+				ClusterName:    "proj-down",
+				ControlPlaneUp: false,
 			},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
@@ -299,7 +299,7 @@ func TestRuntime_SuppressesSeriesWhenProjectDown(t *testing.T) {
 func TestRuntime_SyncIsIdempotent(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
-			status: collector.ProjectStatus{ClusterName: "proj-alpha", ProjectUp: true},
+			status: collector.ControlPlaneStatus{ClusterName: "proj-alpha", ControlPlaneUp: true},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
 					Group:    "compute.miloapis.com",
@@ -355,7 +355,7 @@ func TestRuntime_SyncIsIdempotent(t *testing.T) {
 func TestRuntime_ShutdownUnregistersCallbacks(t *testing.T) {
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
-			status: collector.ProjectStatus{ClusterName: "proj-alpha", ProjectUp: true},
+			status: collector.ControlPlaneStatus{ClusterName: "proj-alpha", ControlPlaneUp: true},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{
 					Group:    "compute.miloapis.com",
@@ -424,9 +424,9 @@ func TestRuntime_CycleBudgetShortCircuits(t *testing.T) {
 	}
 	source := &fakeSource{
 		collectors: []CollectorView{&fakeCollector{
-			status: collector.ProjectStatus{
-				ClusterName: "proj-alpha",
-				ProjectUp:   true,
+			status: collector.ControlPlaneStatus{
+				ClusterName:    "proj-alpha",
+				ControlPlaneUp: true,
 			},
 			objects: []collector.CollectedObjects{{
 				GVR: schema.GroupVersionResource{

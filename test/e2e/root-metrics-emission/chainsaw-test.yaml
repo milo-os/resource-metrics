@@ -1,0 +1,95 @@
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: root-metrics-emission
+spec:
+  description: |
+    End-to-end verification that a metric series emitted from the root
+    (management) control plane lands in Victoria Metrics.
+
+    This test exercises the collectRootControlPlane: true code path added
+    alongside the ControlPlaneCollector rename. The operator engages the
+    root cluster as cluster name "root"; OTel attributes are:
+      milo.project.name       = "root"
+      milo.control_plane.type = "root"
+
+    The test targets Organization resources (resourcemanager.miloapis.com/v1alpha1)
+    which always exist on the management cluster. It grants the operator's
+    ServiceAccount list+watch on organizations, applies a policy, and polls
+    Victoria Metrics for:
+      datum_organization_info{milo_project_name="root",milo_control_plane_type="root"}
+
+    Pipeline exercised:
+        root CP watch -> controller -> OTel collector -> VM remote write
+
+    VM query target:
+        http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query
+
+  steps:
+    - name: apply organization fixture
+      try:
+        - apply:
+            cluster: milo
+            file: ../fixtures/organization.yaml
+
+    - name: grant operator list+watch on organizations on the root cluster
+      try:
+        - apply:
+            cluster: milo
+            file: root-reader-rbac.yaml
+
+    - name: apply the policy and wait Ready
+      try:
+        - apply:
+            cluster: milo
+            file: policy.yaml
+        - assert:
+            cluster: milo
+            timeout: 60s
+            resource:
+              apiVersion: resourcemetrics.miloapis.com/v1alpha1
+              kind: ResourceMetricsPolicy
+              metadata:
+                name: e2e-root-metrics-emission
+              status:
+                activeGenerators: 1
+                (length((conditions || `[]`)[?type == 'Ready' && status == 'True']) > `0`): true
+
+    - name: wait for datum_organization_info to land in Victoria Metrics
+      try:
+        - script:
+            # OTel collection interval is 5s (see deployment config).
+            # Allow up to 90s for: informer sync -> collection tick ->
+            # OTLP push -> collector remote-write -> VM ingest visibility.
+            timeout: 120s
+            content: |
+              set -eu
+
+              # prometheusremotewrite normalises dots to underscores, so:
+              #   milo.project.name       -> milo_project_name
+              #   milo.control_plane.type -> milo_control_plane_type
+              query='datum_organization_info{milo_project_name="root",milo_control_plane_type="root"}'
+              vm_url='http://vmsingle-victoria-metrics-system-vm.victoria-metrics-system.svc.cluster.local:8428/api/v1/query'
+
+              attempt=0
+              until [ "$attempt" -ge 18 ]; do
+                attempt=$((attempt+1))
+                echo "attempt $attempt: querying VM for $query"
+                out=$(kubectl run e2e-rootquery-$attempt \
+                        --rm -i --restart=Never --quiet \
+                        --image=curlimages/curl:8.10.1 \
+                        --timeout=20s \
+                        -- curl -fsS --max-time 5 --data-urlencode "query=${query}" "${vm_url}" \
+                      || true)
+                json=$(printf '%s' "$out" | sed '/pod ".*" deleted/d')
+                echo "response: $json"
+                if printf '%s' "$json" | grep -Eq '"result":\s*\[\s*\{'; then
+                  echo "series found"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "series datum_organization_info{milo_project_name=root,milo_control_plane_type=root} never appeared" >&2
+              exit 1
+
+  # Auto-cleanup via skipDelete: false in .chainsaw.yaml.

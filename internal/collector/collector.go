@@ -39,7 +39,7 @@ const defaultResyncPeriod = 10 * time.Minute
 // code must not mutate it.
 var cacheSyncTimeout = 30 * time.Second
 
-// CollectedObjects is the snapshot returned by ProjectCollector.Collect for a
+// CollectedObjects is the snapshot returned by ControlPlaneCollector.Collect for a
 // single GVR.
 type CollectedObjects struct {
 	GVR     schema.GroupVersionResource
@@ -53,12 +53,12 @@ type GVRStatus struct {
 	LastErr string
 }
 
-// ProjectStatus summarises a ProjectCollector for the health endpoint and
+// ControlPlaneStatus summarises a ControlPlaneCollector for the health endpoint and
 // OTel up/down emitter.
-type ProjectStatus struct {
-	ClusterName string
-	ProjectUp   bool
-	GVRStatuses map[schema.GroupVersionResource]GVRStatus
+type ControlPlaneStatus struct {
+	ClusterName    string
+	ControlPlaneUp bool
+	GVRStatuses    map[schema.GroupVersionResource]GVRStatus
 }
 
 // gvrInformer tracks everything we need to know about one running informer.
@@ -70,14 +70,13 @@ type gvrInformer struct {
 	lastErr  error
 }
 
-// ProjectCollector owns a per-project dynamic informer tree, driven by the
-// policy.Registry. Reconcile() walks the registry snapshot, starts informers
-// for GVRs that are newly desired, and stops informers for GVRs that are no
-// longer desired.
-type ProjectCollector struct {
+// ControlPlaneCollector owns a dynamic informer tree for a single control plane,
+// driven by the policy.Registry. Reconcile() walks the registry snapshot, starts
+// informers for GVRs that are newly desired, and stops informers for GVRs that
+// are no longer desired.
+type ControlPlaneCollector struct {
 	clusterName   string
 	dynamicClient dynamic.Interface
-	restMapper    meta.RESTMapper
 	factory       dynamicinformer.DynamicSharedInformerFactory
 	authzClient   authorizationv1.AuthorizationV1Interface
 
@@ -92,7 +91,7 @@ type ProjectCollector struct {
 	// lifetime of the collector — we do NOT stop it when policies stop
 	// referencing the GVR (the informer is shared across reconciles and
 	// can't be re-Run after a stop). This is bounded by the universe of
-	// GVRs ever requested on this project, which is small.
+	// GVRs ever requested on this control plane, which is small.
 	startedInformers map[schema.GroupVersionResource]struct{}
 
 	registry *policy.Registry
@@ -107,10 +106,10 @@ type ProjectCollector struct {
 	stopped chan struct{}
 }
 
-// NewProjectCollector builds a ProjectCollector for the given engaged cluster.
+// NewControlPlaneCollector builds a ControlPlaneCollector for the given engaged cluster.
 // It constructs a dynamic client and a dynamic informer factory from the
 // cluster's rest.Config. The collector is not started until Start is called.
-func NewProjectCollector(cl cluster.Cluster, clusterName string, registry *policy.Registry, logger logr.Logger) (*ProjectCollector, error) {
+func NewControlPlaneCollector(cl cluster.Cluster, clusterName string, registry *policy.Registry, logger logr.Logger) (*ControlPlaneCollector, error) {
 	if cl == nil {
 		return nil, errors.New("collector: nil cluster")
 	}
@@ -131,10 +130,9 @@ func NewProjectCollector(cl cluster.Cluster, clusterName string, registry *polic
 	}
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, defaultResyncPeriod)
 
-	return &ProjectCollector{
+	return &ControlPlaneCollector{
 		clusterName:      clusterName,
 		dynamicClient:    dynClient,
-		restMapper:       cl.GetRESTMapper(),
 		factory:          factory,
 		authzClient:      authz,
 		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
@@ -146,18 +144,18 @@ func NewProjectCollector(cl cluster.Cluster, clusterName string, registry *polic
 	}, nil
 }
 
-// newProjectCollectorForTesting wires a ProjectCollector around a prebuilt
+// newControlPlaneCollectorForTesting wires a ControlPlaneCollector around a prebuilt
 // dynamic client, factory, and authz client. Used by tests that want to
 // drive reconcile without a live cluster.Cluster.
-func newProjectCollectorForTesting(
+func newControlPlaneCollectorForTesting(
 	clusterName string,
 	dynClient dynamic.Interface,
 	factory dynamicinformer.DynamicSharedInformerFactory,
 	authz authorizationv1.AuthorizationV1Interface,
 	registry *policy.Registry,
 	logger logr.Logger,
-) *ProjectCollector {
-	return &ProjectCollector{
+) *ControlPlaneCollector {
+	return &ControlPlaneCollector{
 		clusterName:      clusterName,
 		dynamicClient:    dynClient,
 		factory:          factory,
@@ -173,7 +171,7 @@ func newProjectCollectorForTesting(
 
 // Start launches the background reconcile loop. It returns immediately. The
 // loop exits when ctx is cancelled or Stop is called.
-func (c *ProjectCollector) Start(ctx context.Context) error {
+func (c *ControlPlaneCollector) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.ctx != nil {
 		c.mu.Unlock()
@@ -190,7 +188,7 @@ func (c *ProjectCollector) Start(ctx context.Context) error {
 	return nil
 }
 
-func (c *ProjectCollector) runLoop() {
+func (c *ControlPlaneCollector) runLoop() {
 	defer close(c.stopped)
 	for {
 		select {
@@ -204,7 +202,7 @@ func (c *ProjectCollector) runLoop() {
 
 // Wake signals the reconcile loop. Non-blocking: if a wake is already
 // pending the signal is coalesced.
-func (c *ProjectCollector) Wake() {
+func (c *ControlPlaneCollector) Wake() {
 	select {
 	case c.wake <- struct{}{}:
 	default:
@@ -213,7 +211,7 @@ func (c *ProjectCollector) Wake() {
 
 // desiredGVRs computes the union of GVRs referenced by the current registry
 // snapshot.
-func (c *ProjectCollector) desiredGVRs() map[schema.GroupVersionResource]struct{} {
+func (c *ControlPlaneCollector) desiredGVRs() map[schema.GroupVersionResource]struct{} {
 	out := make(map[schema.GroupVersionResource]struct{})
 	for _, cp := range c.registry.Snapshot() {
 		if cp == nil {
@@ -237,7 +235,7 @@ func (c *ProjectCollector) desiredGVRs() map[schema.GroupVersionResource]struct{
 // desiredGVRs(). It is idempotent and safe to call repeatedly. Heavy work
 // (SSAR, cache sync) happens without the map lock held; the map is mutated
 // under a brief write lock at the end.
-func (c *ProjectCollector) reconcile() {
+func (c *ControlPlaneCollector) reconcile() {
 	// Snapshot live set under read lock.
 	c.mu.RLock()
 	if c.ctx == nil {
@@ -284,10 +282,12 @@ func (c *ProjectCollector) reconcile() {
 	for _, gvr := range toAdd {
 		entry := c.startInformer(ctx, gvr)
 		if entry == nil {
-			// startInformer reported a cache-sync failure and already
-			// cancelled the informer goroutine. Do not record the entry;
-			// the next reconcile will re-attempt because the GVR is still
-			// desired — that's the intended backoff.
+			// startInformer returned nil: the informer cache timed out
+			// syncing (transient) or a probe-list after sync failure
+			// returned a transient error. The GVR stays in the desired
+			// set and is retried on the next reconcile wake.
+			// In all cases the GVR stays desired, so the next reconcile
+			// will re-attempt. Do not record the entry.
 			continue
 		}
 		c.mu.Lock()
@@ -316,7 +316,7 @@ func (c *ProjectCollector) reconcile() {
 //     error). In that case the per-GVR goroutine has already been cancelled
 //     and the caller must not record the entry — the next reconcile will
 //     re-attempt because the GVR is still desired.
-func (c *ProjectCollector) startInformer(parent context.Context, gvr schema.GroupVersionResource) *gvrInformer {
+func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema.GroupVersionResource) *gvrInformer {
 	log := c.logger.WithValues("gvr", gvr.String())
 
 	allowed, ssarErr := c.preflight(parent, gvr)
@@ -420,7 +420,7 @@ func (c *ProjectCollector) startInformer(parent context.Context, gvr schema.Grou
 // probeList performs a small list request against the live API. It is used
 // only to classify failure modes when WaitForCacheSync times out. The
 // returned error is inspected by the caller.
-func (c *ProjectCollector) probeList(ctx context.Context, gvr schema.GroupVersionResource) error {
+func (c *ControlPlaneCollector) probeList(ctx context.Context, gvr schema.GroupVersionResource) error {
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err := c.dynamicClient.Resource(gvr).List(probeCtx, listOptionsOne())
@@ -430,7 +430,7 @@ func (c *ProjectCollector) probeList(ctx context.Context, gvr schema.GroupVersio
 // Collect returns a snapshot of every synced, non-denied informer. Entries
 // that are not synced or denied are skipped. The returned slice is owned by
 // the caller.
-func (c *ProjectCollector) Collect() []CollectedObjects {
+func (c *ControlPlaneCollector) Collect() []CollectedObjects {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -458,7 +458,7 @@ func (c *ProjectCollector) Collect() []CollectedObjects {
 // Stop cancels the collector's context, which in turn cancels every per-GVR
 // informer goroutine, and waits for the reconcile loop to exit or for ctx
 // to expire.
-func (c *ProjectCollector) Stop(ctx context.Context) error {
+func (c *ControlPlaneCollector) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	cancel := c.cancel
 	stopped := c.stopped
@@ -481,7 +481,7 @@ func (c *ProjectCollector) Stop(ctx context.Context) error {
 
 // Status returns a snapshot of the collector state for the health endpoint
 // and OTel up/down emitter.
-func (c *ProjectCollector) Status() ProjectStatus {
+func (c *ControlPlaneCollector) Status() ControlPlaneStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -500,22 +500,22 @@ func (c *ProjectCollector) Status() ProjectStatus {
 			anySynced = true
 		}
 		// Treat a non-denied, unsynced informer with an error as fatal for
-		// the purpose of ProjectUp.
+		// the purpose of ControlPlaneUp.
 		if !inf.synced && !inf.denied && inf.lastErr != nil {
 			anyFatal = true
 		}
 		statuses[gvr] = s
 	}
 
-	return ProjectStatus{
-		ClusterName: c.clusterName,
-		ProjectUp:   anySynced && !anyFatal,
-		GVRStatuses: statuses,
+	return ControlPlaneStatus{
+		ClusterName:    c.clusterName,
+		ControlPlaneUp: anySynced && !anyFatal,
+		GVRStatuses:    statuses,
 	}
 }
 
 // ClusterName returns the cluster name this collector is bound to.
-func (c *ProjectCollector) ClusterName() string { return c.clusterName }
+func (c *ControlPlaneCollector) ClusterName() string { return c.clusterName }
 
 // toUnstructuredContent best-effort extracts the map form of an informer
 // store object. Dynamic informers emit *unstructured.Unstructured.

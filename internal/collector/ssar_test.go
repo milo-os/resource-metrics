@@ -50,7 +50,7 @@ func TestPreflight_WatchDenied(t *testing.T) {
 		"list":  true,
 		"watch": false,
 	})
-	pc := &ProjectCollector{
+	pc := &ControlPlaneCollector{
 		authzClient: cs.AuthorizationV1(),
 	}
 	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
@@ -66,7 +66,7 @@ func TestPreflight_BothAllowed(t *testing.T) {
 		"list":  true,
 		"watch": true,
 	})
-	pc := &ProjectCollector{
+	pc := &ControlPlaneCollector{
 		authzClient: cs.AuthorizationV1(),
 	}
 	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
@@ -83,7 +83,7 @@ func TestPreflight_ListDenied(t *testing.T) {
 		"list":  false,
 		"watch": true,
 	})
-	pc := &ProjectCollector{
+	pc := &ControlPlaneCollector{
 		authzClient: cs.AuthorizationV1(),
 	}
 	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}

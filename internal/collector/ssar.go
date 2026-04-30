@@ -25,7 +25,7 @@ import (
 // SSAR only answers RBAC questions. It cannot tell us that a CRD is not
 // installed — that is detected separately when the informer cache-sync
 // times out and a subsequent list returns NotFound.
-func (c *ProjectCollector) preflight(ctx context.Context, gvr schema.GroupVersionResource) (bool, error) {
+func (c *ControlPlaneCollector) preflight(ctx context.Context, gvr schema.GroupVersionResource) (bool, error) {
 	if c.authzClient == nil {
 		// In tests we may not wire an authz client; treat missing authz as
 		// "allow" so reconcile() can exercise the happy path.
@@ -54,7 +54,7 @@ func (c *ProjectCollector) preflight(ctx context.Context, gvr schema.GroupVersio
 }
 
 // checkVerb issues a single SSAR for the given verb against the GVR.
-func (c *ProjectCollector) checkVerb(ctx context.Context, gvr schema.GroupVersionResource, verb string) (bool, error) {
+func (c *ControlPlaneCollector) checkVerb(ctx context.Context, gvr schema.GroupVersionResource, verb string) (bool, error) {
 	review := &authorizationv1.SelfSubjectAccessReview{
 		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 			ResourceAttributes: &authorizationv1.ResourceAttributes{

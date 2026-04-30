@@ -89,6 +89,12 @@ type DiscoveryConfig struct {
 	// template when connecting to project control planes. When not provided,
 	// the operator will use the in-cluster config.
 	ProjectKubeconfigPath string `json:"projectKubeconfigPath"`
+
+	// CollectRootControlPlane, when true and discovery.mode is "milo", also
+	// collects metrics from the root/management control plane (the cluster
+	// used for project discovery). Metrics from the root control plane are
+	// emitted with milo.project.name = "root". Defaults to false.
+	CollectRootControlPlane bool `json:"collectRootControlPlane"`
 }
 
 // SetDefaults_DiscoveryConfig sets default values for DiscoveryConfig.
@@ -171,11 +177,12 @@ func (c OtelConfig) MarshalLog() any {
 // String returns a human-readable rendering of the DiscoveryConfig.
 func (c DiscoveryConfig) String() string {
 	return fmt.Sprintf(
-		"{Mode:%q InternalServiceDiscovery:%t DiscoveryKubeconfigPath:%q ProjectKubeconfigPath:%q}",
+		"{Mode:%q InternalServiceDiscovery:%t DiscoveryKubeconfigPath:%q ProjectKubeconfigPath:%q CollectRootControlPlane:%t}",
 		string(c.Mode),
 		c.InternalServiceDiscovery,
 		c.DiscoveryKubeconfigPath,
 		c.ProjectKubeconfigPath,
+		c.CollectRootControlPlane,
 	)
 }
 

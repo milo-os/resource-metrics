@@ -1,0 +1,19 @@
+apiVersion: resourcemetrics.miloapis.com/v1alpha1
+kind: ResourceMetricsPolicy
+metadata:
+  name: e2e-root-metrics-emission
+spec:
+  generators:
+    - name: organization-info
+      resource:
+        group: resourcemanager.miloapis.com
+        version: v1alpha1
+        resource: organizations
+      families:
+        - name: datum_organization_info
+          help: "Metadata about each Organization on the root control plane."
+          type: gauge
+          metrics:
+            - labels:
+                - name: name
+                  value: "object.metadata.name"
