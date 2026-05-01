@@ -12,6 +12,9 @@ resources:
   - ../../default
   - milo-kubeconfig-secret.yaml
 
+components:
+  - ../../components/namespace
+
 # Replace the content of the base `service-config` ConfigMap with the
 # operator config we want for e2e. The generated ConfigMap name is
 # `resource-metrics-service-config` (base uses name `service-config`
