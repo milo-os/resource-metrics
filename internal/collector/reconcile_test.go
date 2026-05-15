@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/dynamic/dynamicinformer"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 
@@ -67,6 +66,34 @@ func fakeDynamicClientWithLists() *dynamicfake.FakeDynamicClient {
 	)
 }
 
+// makePolicyWithFields builds a policy whose compiled RequiredFields will
+// contain exactly the supplied dot-path fields (one gauge metric per field).
+func makePolicyWithFields(gvr schema.GroupVersionResource, fields ...string) *v1alpha1.ResourceMetricsPolicy {
+	metrics := make([]v1alpha1.MetricSpec, 0, len(fields))
+	for _, f := range fields {
+		expr := "object." + f
+		metrics = append(metrics, v1alpha1.MetricSpec{Value: &expr})
+	}
+	return &v1alpha1.ResourceMetricsPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1"},
+		Spec: v1alpha1.ResourceMetricsPolicySpec{
+			Generators: []v1alpha1.GeneratorSpec{
+				{
+					Name: "gen",
+					Resource: v1alpha1.ResourceReference{
+						Group:    gvr.Group,
+						Version:  gvr.Version,
+						Resource: gvr.Resource,
+					},
+					Families: []v1alpha1.MetricFamilySpec{
+						{Name: "test", Metrics: metrics},
+					},
+				},
+			},
+		},
+	}
+}
+
 func makePolicy(name string, gvrs ...schema.GroupVersionResource) *v1alpha1.ResourceMetricsPolicy {
 	gens := make([]v1alpha1.GeneratorSpec, 0, len(gvrs))
 	for i, gvr := range gvrs {
@@ -95,12 +122,10 @@ func newTestCollector(t *testing.T) (*ControlPlaneCollector, *policy.Registry) {
 	reg := policy.NewRegistry(env)
 
 	dynClient := fakeDynamicClientWithLists()
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Hour)
 
 	pc := newControlPlaneCollectorForTesting(
 		"test",
 		dynClient,
-		factory,
 		nil, // no authz client -> preflight returns allowed
 		reg,
 		testr.New(t),
@@ -200,12 +225,9 @@ func TestReconcile_RemovesEntryAfterCacheSyncFailure(t *testing.T) {
 		return true, nil, errors.New("synthetic permanent list failure")
 	})
 
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, time.Hour)
-
 	pc := newControlPlaneCollectorForTesting(
 		"test",
 		dynClient,
-		factory,
 		nil, // no authz -> preflight allowed
 		reg,
 		testr.New(t),
@@ -277,4 +299,158 @@ func TestReconcile_DuplicateGVRIsNoop(t *testing.T) {
 
 	require.Same(t, first, second, "informer entry should not be replaced on duplicate reconcile")
 	require.Len(t, pc.informers, 1)
+}
+
+// newWidgetCollector builds a collector seeded with a single Widget (w1)
+// carrying spec.replicas and spec.image, plus a started collector. Returns
+// the dynamic client so tests can drive further watch events.
+func newWidgetCollector(t *testing.T) (*ControlPlaneCollector, *policy.Registry, *dynamicfake.FakeDynamicClient) {
+	t.Helper()
+	env, err := policy.NewEnv()
+	require.NoError(t, err)
+	reg := policy.NewRegistry(env)
+
+	scheme := runtime.NewScheme()
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{testGVR: "WidgetList"},
+		&unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "example.test/v1",
+				"kind":       "Widget",
+				"metadata":   map[string]any{"name": "w1", "namespace": "default"},
+				"spec":       map[string]any{"replicas": int64(3), "image": "nginx"},
+			},
+		},
+	)
+	pc := newControlPlaneCollectorForTesting("test", dynClient, nil, reg, testr.New(t))
+	require.NoError(t, pc.Start(t.Context()))
+	t.Cleanup(func() {
+		ctx, cancel := cleanupContext()
+		defer cancel()
+		_ = pc.Stop(ctx)
+	})
+	return pc, reg, dynClient
+}
+
+// w1Spec returns w1's spec map from the collected output, or nil if absent.
+func w1Spec(out []CollectedObjects) map[string]any {
+	for _, co := range out {
+		for _, obj := range co.Objects {
+			if obj["metadata"].(map[string]any)["name"] != "w1" {
+				continue
+			}
+			if spec, ok := obj["spec"].(map[string]any); ok {
+				return spec
+			}
+		}
+	}
+	return nil
+}
+
+func TestReconcile_PolicyFieldUpdates(t *testing.T) {
+	t.Run("widening rebuilds and repopulates the cache", func(t *testing.T) {
+		pc, reg, _ := newWidgetCollector(t)
+
+		// Narrow policy first; cache trims to spec.replicas + identity.
+		_, errs := reg.Upsert(makePolicyWithFields(testGVR, "spec.replicas"))
+		require.Empty(t, errs)
+		pc.Wake()
+		requireCondition(t, func() bool {
+			pc.mu.RLock()
+			defer pc.mu.RUnlock()
+			inf, ok := pc.informers[testGVR]
+			return ok && inf.synced
+		}, "informer for %s must sync", testGVR)
+
+		spec := w1Spec(pc.Collect())
+		require.Contains(t, spec, "replicas")
+		require.NotContains(t, spec, "image", "spec.image must be trimmed by the narrow policy")
+
+		pc.mu.RLock()
+		infBefore := pc.informers[testGVR]
+		pc.mu.RUnlock()
+		require.NotNil(t, infBefore)
+
+		// Widen to include spec.image — the cached object no longer covers
+		// the required fields, so reconcile must rebuild.
+		_, errs = reg.Upsert(makePolicyWithFields(testGVR, "spec.replicas", "spec.image"))
+		require.Empty(t, errs)
+		pc.Wake()
+
+		// Rebuild swaps in a fresh *gvrInformer.
+		requireCondition(t, func() bool {
+			pc.mu.RLock()
+			defer pc.mu.RUnlock()
+			inf, ok := pc.informers[testGVR]
+			return ok && inf != infBefore
+		}, "informer must be rebuilt after field-set expansion")
+
+		// Fresh list repopulates w1 with spec.image, even though w1 itself
+		// has not changed on the cluster.
+		requireCondition(t, func() bool {
+			spec := w1Spec(pc.Collect())
+			return spec != nil && spec["image"] == "nginx"
+		}, "w1 must regain spec.image after rebuild")
+	})
+
+	t.Run("narrowing takes the subset fast path and converges", func(t *testing.T) {
+		pc, reg, dynClient := newWidgetCollector(t)
+
+		// Wide policy first; cache carries spec.replicas + spec.image.
+		_, errs := reg.Upsert(makePolicyWithFields(testGVR, "spec.replicas", "spec.image"))
+		require.Empty(t, errs)
+		pc.Wake()
+		requireCondition(t, func() bool {
+			pc.mu.RLock()
+			defer pc.mu.RUnlock()
+			inf, ok := pc.informers[testGVR]
+			return ok && inf.synced
+		}, "informer for %s must sync", testGVR)
+
+		pc.mu.RLock()
+		infBefore := pc.informers[testGVR]
+		pc.mu.RUnlock()
+		require.NotNil(t, infBefore)
+
+		// Narrow to spec.replicas only. No rebuild
+		_, errs = reg.Upsert(makePolicyWithFields(testGVR, "spec.replicas"))
+		require.Empty(t, errs)
+		pc.Wake()
+
+		requireCondition(t, func() bool {
+			loaded := infBefore.fields.Load()
+			return len(loaded) == 1 && loaded[0] == "spec.replicas"
+		}, "atomic field set must reflect the narrowed policy")
+
+		pc.mu.RLock()
+		infAfter := pc.informers[testGVR]
+		pc.mu.RUnlock()
+		require.Same(t, infBefore, infAfter, "narrowing must not rebuild the informer")
+
+		// Trigger a watch event. The transform should now drop spec.image
+		// from w1's cached entry, converging on the narrower field set.
+		_, err := dynClient.Resource(testGVR).Namespace("default").Update(
+			t.Context(),
+			&unstructured.Unstructured{
+				Object: map[string]any{
+					"apiVersion": "example.test/v1",
+					"kind":       "Widget",
+					"metadata":   map[string]any{"name": "w1", "namespace": "default"},
+					"spec":       map[string]any{"replicas": int64(4), "image": "nginx"},
+				},
+			},
+			metav1.UpdateOptions{},
+		)
+		require.NoError(t, err)
+
+		requireCondition(t, func() bool {
+			spec := w1Spec(pc.Collect())
+			if spec == nil {
+				return false
+			}
+			_, hasImage := spec["image"]
+			return !hasImage
+		}, "spec.image must be trimmed from w1's cache entry on the next watch event")
+	})
 }

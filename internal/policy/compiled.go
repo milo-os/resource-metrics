@@ -25,9 +25,10 @@ type CompiledPolicy struct {
 // If compilation of every family in the generator fails, Generators[i] in the
 // parent policy may be nil — check for that at the call site.
 type CompiledGenerator struct {
-	Name     string
-	Resource v1alpha1.ResourceReference
-	Families []*CompiledFamily
+	Name           string
+	Resource       v1alpha1.ResourceReference
+	Families       []*CompiledFamily
+	RequiredFields []string
 }
 
 // CompiledFamily is the compiled form of a MetricFamilySpec.

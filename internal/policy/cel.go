@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
@@ -148,14 +150,17 @@ func (e *EvalTypeError) Is(target error) bool {
 // created once per process — the underlying cel.Env is safe to use from
 // multiple goroutines.
 type Env struct {
-	env *cel.Env
+	env             *cel.Env
+	rootObjectIdent string
 }
+
+const envDefaultRootObjectIdent = "object"
 
 // NewEnv builds the CEL environment with the extensions used by
 // ResourceMetricsPolicy expressions. Not enabled: Sets, Protos, NativeTypes.
 func NewEnv() (*Env, error) {
 	env, err := cel.NewEnv(
-		cel.Variable("object", cel.DynType),
+		cel.Variable(envDefaultRootObjectIdent, cel.DynType),
 		ext.Strings(),
 		ext.Encoders(),
 		ext.Math(),
@@ -164,7 +169,7 @@ func NewEnv() (*Env, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cel: new env: %w", err)
 	}
-	return &Env{env: env}, nil
+	return &Env{env: env, rootObjectIdent: envDefaultRootObjectIdent}, nil
 }
 
 // NewItemEnv returns a new Env that extends the base env with an "item"
@@ -175,13 +180,21 @@ func (e *Env) NewItemEnv() (*Env, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cel: extend env with item: %w", err)
 	}
-	return &Env{env: extended}, nil
+	return &Env{env: extended, rootObjectIdent: e.rootObjectIdent}, nil
+}
+
+// Program wraps a compiled CEL program and the set of field paths the
+// expression requires from the root object, as determined statically from
+// the AST.
+type Program struct {
+	cel.Program
+	RequiredFields []string
 }
 
 // Compile parses, type-checks, and programs the given expression. The returned
 // Program has a runtime cost limit applied so pathological comprehensions will
 // be cancelled mid-evaluation rather than pegging a core.
-func (e *Env) Compile(expr string) (cel.Program, error) {
+func (e *Env) Compile(expr string) (*Program, error) {
 	ast, issues := e.env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("cel: parse: %w", issues.Err())
@@ -199,7 +212,41 @@ func (e *Env) Compile(expr string) (cel.Program, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cel: program: %w", err)
 	}
-	return prog, nil
+	return &Program{Program: prog, RequiredFields: requiredFields(checked, e.rootObjectIdent)}, nil
+}
+
+// requiredFields determines which root-object fields the CEL program needs
+// at evaluation time, by walking its AST. This may include duplicates.
+func requiredFields(a *cel.Ast, rootObjectIdent string) []string {
+	var (
+		out       = []string{}
+		nextToken = []string{}
+	)
+	v := ast.NewExprVisitor(func(e ast.Expr) {
+		isBuildingNextToken := len(nextToken) > 0
+		switch e.Kind() {
+		case ast.SelectKind:
+			nextToken = append(nextToken, e.AsSelect().FieldName())
+			return
+		case ast.IdentKind:
+			if !isBuildingNextToken {
+				return
+			}
+			if e.AsIdent() == rootObjectIdent {
+				slices.Reverse(nextToken)
+				out = append(out, strings.Join(nextToken, "."))
+			}
+			nextToken = nextToken[:0]
+		case ast.CallKind:
+			if !isBuildingNextToken {
+				return
+			}
+			nextToken = nextToken[:0]
+		}
+	})
+
+	ast.PreOrderVisit(a.NativeRep().Expr(), v)
+	return out
 }
 
 // evalWithRecover runs prog with a bounded context and translates panics into

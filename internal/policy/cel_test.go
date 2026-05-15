@@ -260,6 +260,46 @@ func TestCycleBudget_DeadlineExceeded(t *testing.T) {
 		"a past deadline must produce ErrCycleBudgetExceeded, got %v", err)
 }
 
+func TestCompile_RequiredFields(t *testing.T) {
+	tests := []struct {
+		env  *policy.Env
+		expr string
+		want []string
+	}{
+		{expr: `'hello'`, want: []string{}},
+		{expr: "object.metadata.name", want: []string{"metadata.name"}},
+		{expr: "object.spec.replicas", want: []string{"spec.replicas"}},
+		{expr: `object.metadata.labels["app"]`, want: []string{"metadata.labels"}},
+		{expr: `object.spec.replicas > object.status.observedGeneration`, want: []string{"spec.replicas", "status.observedGeneration"}},
+		{expr: `object.status.conditions.exists(c, c.type == "Ready")`, want: []string{"status.conditions"}},
+		{expr: `object.spec.replicas > 0 && object.metadata.name == "foo"`, want: []string{"spec.replicas", "metadata.name"}},
+		{expr: `string(object.metadata.creationTimestamp)`, want: []string{"metadata.creationTimestamp"}},
+		{expr: `object.metadata.name + object.metadata.name`, want: []string{"metadata.name", "metadata.name"}},
+		{expr: `object.status.conditions[0].type`, want: []string{"status.conditions"}},
+		{expr: `has(object.metadata.labels)`, want: []string{"metadata.labels"}},
+		{expr: `object.spec.template.spec.containers`, want: []string{"spec.template.spec.containers"}},
+		{expr: `object.status.conditions.exists(c, c.type == object.metadata.name)`, want: []string{"metadata.name", "status.conditions"}},
+		{expr: `object.items.filter(x, x.active).exists(y, y.name == "foo")`, want: []string{"items"}},
+		{expr: `object.metadata.name in ["foo", "bar"]`, want: []string{"metadata.name"}},
+		{expr: `object.spec.active ? object.metadata.name : object.metadata.namespace`, want: []string{"metadata.name", "metadata.namespace", "spec.active"}},
+		{env: mustItemEnv(t), expr: `item.type == object.metadata.name`, want: []string{"metadata.name"}},
+	}
+
+	defaultEnv := mustEnv(t)
+	for _, tc := range tests {
+		t.Run(tc.expr, func(t *testing.T) {
+			env := tc.env
+			if env == nil {
+				env = defaultEnv
+			}
+
+			prog, err := env.Compile(tc.expr)
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.want, prog.RequiredFields)
+		})
+	}
+}
+
 func mustItemEnv(t *testing.T) *policy.Env {
 	t.Helper()
 	base := mustEnv(t)

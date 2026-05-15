@@ -30,9 +30,10 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 
 	for _, gen := range policy.Spec.Generators {
 		cg := &CompiledGenerator{
-			Name:     gen.Name,
-			Resource: gen.Resource,
-			Families: make([]*CompiledFamily, 0, len(gen.Families)),
+			Name:           gen.Name,
+			Resource:       gen.Resource,
+			Families:       make([]*CompiledFamily, 0, len(gen.Families)),
+			RequiredFields: make([]string, 0),
 		}
 		// genExprTotal counts every compilable expression in the generator
 		// (each metric's value + each label). genExprSuccesses counts those
@@ -88,6 +89,7 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 						continue
 					}
 					cm.ForEachProgram = prog
+					cg.RequiredFields = append(cg.RequiredFields, prog.RequiredFields...)
 					genExprSuccesses++
 				}
 
@@ -106,6 +108,7 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 						})
 					} else {
 						cm.ValueProgram = prog
+						cg.RequiredFields = append(cg.RequiredFields, prog.RequiredFields...)
 						genExprSuccesses++
 					}
 				}
@@ -129,6 +132,7 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 						Name:         lbl.Name,
 						ValueProgram: prog,
 					})
+					cg.RequiredFields = append(cg.RequiredFields, prog.RequiredFields...)
 					genExprSuccesses++
 				}
 				cf.Metrics = append(cf.Metrics, cm)

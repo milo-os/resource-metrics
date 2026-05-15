@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -62,9 +65,12 @@ type ControlPlaneStatus struct {
 }
 
 // gvrInformer tracks everything we need to know about one running informer.
+// fields and stop are non-nil iff a goroutine was started for this GVR;
+// denied/probe-rejected entries have only the bookkeeping fields populated.
 type gvrInformer struct {
 	informer informers.GenericInformer
-	cancel   context.CancelFunc
+	fields   *sharedRequiredFields
+	stop     context.CancelFunc
 	synced   bool
 	denied   bool
 	lastErr  error
@@ -73,26 +79,17 @@ type gvrInformer struct {
 // ControlPlaneCollector owns a dynamic informer tree for a single control plane,
 // driven by the policy.Registry. Reconcile() walks the registry snapshot, starts
 // informers for GVRs that are newly desired, and stops informers for GVRs that
-// are no longer desired.
+// are no longer desired. Per-GVR DynamicSharedInformerFactory instances are
+// constructed lazily in buildInformer so an informer can be torn down and
+// rebuilt — needed when a policy's field set expands and the existing cache
+// contents are no longer a superset of what policies require.
 type ControlPlaneCollector struct {
 	clusterName   string
 	dynamicClient dynamic.Interface
-	factory       dynamicinformer.DynamicSharedInformerFactory
 	authzClient   authorizationv1.AuthorizationV1Interface
 
 	mu        sync.RWMutex
 	informers map[schema.GroupVersionResource]*gvrInformer
-	// startedInformers tracks GVRs whose underlying SharedIndexInformer
-	// has already been started via informer.Run(). The dynamic factory
-	// returns the SAME SharedIndexInformer instance for repeated
-	// ForResource calls on the same GVR; calling Run() on it twice is a
-	// no-op and emits "sharedIndexInformer has started, run more than
-	// once is not allowed". Once started, the informer runs for the
-	// lifetime of the collector — we do NOT stop it when policies stop
-	// referencing the GVR (the informer is shared across reconciles and
-	// can't be re-Run after a stop). This is bounded by the universe of
-	// GVRs ever requested on this control plane, which is small.
-	startedInformers map[schema.GroupVersionResource]struct{}
 
 	registry *policy.Registry
 	wake     chan struct{}
@@ -107,8 +104,9 @@ type ControlPlaneCollector struct {
 }
 
 // NewControlPlaneCollector builds a ControlPlaneCollector for the given engaged cluster.
-// It constructs a dynamic client and a dynamic informer factory from the
-// cluster's rest.Config. The collector is not started until Start is called.
+// It constructs a dynamic client from the cluster's rest.Config; per-GVR
+// informer factories are constructed lazily inside buildInformer. The
+// collector is not started until Start is called.
 func NewControlPlaneCollector(cl cluster.Cluster, clusterName string, registry *policy.Registry, logger logr.Logger) (*ControlPlaneCollector, error) {
 	if cl == nil {
 		return nil, errors.New("collector: nil cluster")
@@ -128,44 +126,38 @@ func NewControlPlaneCollector(cl cluster.Cluster, clusterName string, registry *
 	if err != nil {
 		return nil, fmt.Errorf("collector: build authorization client: %w", err)
 	}
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, defaultResyncPeriod)
 
 	return &ControlPlaneCollector{
-		clusterName:      clusterName,
-		dynamicClient:    dynClient,
-		factory:          factory,
-		authzClient:      authz,
-		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
-		startedInformers: make(map[schema.GroupVersionResource]struct{}),
-		registry:         registry,
-		wake:             make(chan struct{}, 1),
-		logger:           logger.WithValues("cluster", clusterName),
-		stopped:          make(chan struct{}),
+		clusterName:   clusterName,
+		dynamicClient: dynClient,
+		authzClient:   authz,
+		informers:     make(map[schema.GroupVersionResource]*gvrInformer),
+		registry:      registry,
+		wake:          make(chan struct{}, 1),
+		logger:        logger.WithValues("cluster", clusterName),
+		stopped:       make(chan struct{}),
 	}, nil
 }
 
-// newControlPlaneCollectorForTesting wires a ControlPlaneCollector around a prebuilt
-// dynamic client, factory, and authz client. Used by tests that want to
-// drive reconcile without a live cluster.Cluster.
+// newControlPlaneCollectorForTesting wires a ControlPlaneCollector around a
+// prebuilt dynamic client and authz client. Used by tests that want to drive
+// reconcile without a live cluster.Cluster.
 func newControlPlaneCollectorForTesting(
 	clusterName string,
 	dynClient dynamic.Interface,
-	factory dynamicinformer.DynamicSharedInformerFactory,
 	authz authorizationv1.AuthorizationV1Interface,
 	registry *policy.Registry,
 	logger logr.Logger,
 ) *ControlPlaneCollector {
 	return &ControlPlaneCollector{
-		clusterName:      clusterName,
-		dynamicClient:    dynClient,
-		factory:          factory,
-		authzClient:      authz,
-		informers:        make(map[schema.GroupVersionResource]*gvrInformer),
-		startedInformers: make(map[schema.GroupVersionResource]struct{}),
-		registry:         registry,
-		wake:             make(chan struct{}, 1),
-		logger:           logger.WithValues("cluster", clusterName),
-		stopped:          make(chan struct{}),
+		clusterName:   clusterName,
+		dynamicClient: dynClient,
+		authzClient:   authz,
+		informers:     make(map[schema.GroupVersionResource]*gvrInformer),
+		registry:      registry,
+		wake:          make(chan struct{}, 1),
+		logger:        logger.WithValues("cluster", clusterName),
+		stopped:       make(chan struct{}),
 	}
 }
 
@@ -211,8 +203,9 @@ func (c *ControlPlaneCollector) Wake() {
 
 // desiredGVRs computes the union of GVRs referenced by the current registry
 // snapshot.
-func (c *ControlPlaneCollector) desiredGVRs() map[schema.GroupVersionResource]struct{} {
-	out := make(map[schema.GroupVersionResource]struct{})
+func (c *ControlPlaneCollector) desiredGVRs() map[schema.GroupVersionResource][]string {
+	out := make(map[schema.GroupVersionResource][]string)
+
 	for _, cp := range c.registry.Snapshot() {
 		if cp == nil {
 			continue
@@ -221,12 +214,17 @@ func (c *ControlPlaneCollector) desiredGVRs() map[schema.GroupVersionResource]st
 			if gen == nil {
 				continue
 			}
-			out[schema.GroupVersionResource{
+			gvr := schema.GroupVersionResource{
 				Group:    gen.Resource.Group,
 				Version:  gen.Resource.Version,
 				Resource: gen.Resource.Resource,
-			}] = struct{}{}
+			}
+			out[gvr] = append(out[gvr], gen.RequiredFields...)
 		}
+	}
+	for gvr, fields := range out {
+		slices.Sort(fields)
+		out[gvr] = slices.Compact(fields)
 	}
 	return out
 }
@@ -242,22 +240,43 @@ func (c *ControlPlaneCollector) reconcile() {
 		c.mu.RUnlock()
 		return
 	}
-	present := make(map[schema.GroupVersionResource]*gvrInformer, len(c.informers))
-	for gvr, inf := range c.informers {
-		present[gvr] = inf
-	}
+	present := maps.Clone(c.informers)
 	ctx := c.ctx
 	c.mu.RUnlock()
 
 	desired := c.desiredGVRs()
 
-	// Plan additions and removals.
-	var toAdd []schema.GroupVersionResource
-	var toRemove []schema.GroupVersionResource
+	// Plan additions, rebuilds, and removals.
+	var (
+		toAdd     []schema.GroupVersionResource
+		toRebuild = make([]schema.GroupVersionResource, 0, len(present))
+		toRemove  []schema.GroupVersionResource
+	)
 	for gvr := range desired {
-		if _, ok := present[gvr]; !ok {
+		inf, ok := present[gvr]
+		if !ok {
 			toAdd = append(toAdd, gvr)
+			continue
 		}
+		// Denied entry: nothing to update.
+		if inf.fields == nil {
+			continue
+		}
+		// If the desired field set is a subset of what the cache
+		// already holds, the existing cache contents are already
+		// sufficient; just publish the new field set so future watch
+		// events trim to it. Otherwise the cache is missing fields
+		// that policies now reference — schedule a rebuild so a fresh
+		// list-then-watch repopulates entries with the wider field
+		// set, leaving the old informer serving until the new one is
+		// synced (two-phase swap).
+		if subset(desired[gvr], inf.fields.Load()) {
+			inf.fields.Set(desired[gvr])
+			continue
+		}
+		c.logger.V(1).Info("field set expanded; scheduling rebuild",
+			"gvr", gvr.String(), "fields", desired[gvr])
+		toRebuild = append(toRebuild, gvr)
 	}
 	for gvr := range present {
 		if _, ok := desired[gvr]; !ok {
@@ -265,12 +284,14 @@ func (c *ControlPlaneCollector) reconcile() {
 		}
 	}
 
-	// Apply removals first: cancel and delete from the map.
+	// Apply removals: stop the goroutine (if any) and drop the entry.
 	if len(toRemove) > 0 {
 		c.mu.Lock()
 		for _, gvr := range toRemove {
 			if inf, ok := c.informers[gvr]; ok {
-				inf.cancel()
+				if inf.stop != nil {
+					inf.stop()
+				}
 				delete(c.informers, gvr)
 				c.logger.V(1).Info("stopped informer", "gvr", gvr.String())
 			}
@@ -278,57 +299,108 @@ func (c *ControlPlaneCollector) reconcile() {
 		c.mu.Unlock()
 	}
 
-	// Apply additions: SSAR preflight + start informer + wait for sync.
+	// Apply additions: preflight + start informer + wait for sync.
 	for _, gvr := range toAdd {
-		entry := c.startInformer(ctx, gvr)
+		entry := c.startInformer(ctx, gvr, desired[gvr])
 		if entry == nil {
-			// startInformer returned nil: the informer cache timed out
-			// syncing (transient) or a probe-list after sync failure
-			// returned a transient error. The GVR stays in the desired
-			// set and is retried on the next reconcile wake.
-			// In all cases the GVR stays desired, so the next reconcile
-			// will re-attempt. Do not record the entry.
+			// Transient failure (sync timeout or apiserver flake).
+			// The GVR stays desired; the next reconcile retries.
 			continue
 		}
 		c.mu.Lock()
-		// Re-check: a concurrent reconcile could already have populated this.
-		if existing, ok := c.informers[gvr]; ok {
-			// Another reconcile beat us to it. Cancel ours and keep the
-			// existing entry so we don't double-run informers.
-			if entry.cancel != nil {
-				entry.cancel()
-			}
-			_ = existing
-			c.mu.Unlock()
-			continue
-		}
 		c.informers[gvr] = entry
 		c.mu.Unlock()
 	}
+
+	// Apply rebuilds: build the new informer alongside the old one and
+	// swap once the new one is synced. The old informer keeps serving
+	// Collect() until the swap.
+	for _, gvr := range toRebuild {
+		entry := c.startInformer(ctx, gvr, desired[gvr])
+		if entry == nil {
+			// Transient: leave the old informer in place.
+			continue
+		}
+		if !entry.synced {
+			// Denied/failed mid-rebuild: keep old serving with narrower fields.
+			continue
+		}
+
+		c.mu.Lock()
+		old := c.informers[gvr]
+		c.informers[gvr] = entry
+		c.mu.Unlock()
+		if old != nil && old.stop != nil {
+			old.stop()
+		}
+	}
 }
 
-// startInformer performs the preflight and, on success, launches an informer
-// for the given GVR. It returns:
+// sharedRequiredFields publishes the active required-field set to an
+// informer's cache transform. Reconcile narrows via Set; widening rebuilds the
+// informer instead.
+type sharedRequiredFields struct {
+	p atomic.Pointer[[]string]
+}
+
+func (r *sharedRequiredFields) Set(fields []string) { r.p.Store(&fields) }
+
+func (r *sharedRequiredFields) Load() []string {
+	if fp := r.p.Load(); fp != nil {
+		return *fp
+	}
+	return nil
+}
+
+// subset reports whether every element of a is present in b. Both slices
+// must be sorted; desiredGVRs guarantees that.
+func subset(a, b []string) bool {
+	for _, x := range a {
+		if _, found := slices.BinarySearch(b, x); !found {
+			return false
+		}
+	}
+	return true
+}
+
+// trimTransform prunes fields that are not required to evaluate
+// the CEL program from the object before it gets cached. Existing cache entries
+// are not re-trimmed when fields change; updates take effect on the next watch
+// event.
+func trimTransform(fields *sharedRequiredFields) cache.TransformFunc {
+	return func(obj any) (any, error) {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			return obj, nil
+		}
+		policy.TrimObjectInPlace(u.Object, fields.Load())
+		return u, nil
+	}
+}
+
+// startInformer performs the preflight, launches a fresh informer for the
+// given GVR, and waits for its cache to sync. It does NOT touch the
+// collector's maps — installing the result is the caller's responsibility.
 //
-//   - a non-nil entry for the happy path (synced) and for SSAR denials (so
-//     reconcile records the denial and does not retry every wake);
-//   - nil when the informer cache failed to sync (timeout or probe list
-//     error). In that case the per-GVR goroutine has already been cancelled
-//     and the caller must not record the entry — the next reconcile will
-//     re-attempt because the GVR is still desired.
-func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema.GroupVersionResource) *gvrInformer {
+// Returns:
+//   - a non-nil entry with synced=true on success.
+//   - a non-nil entry with denied=true on permanent denial (SSAR, probe-list,
+//     or sync-then-denied). fields and stop are nil; no goroutine is running.
+//   - nil on transient failure (sync timeout, apiserver flake). Any informer
+//     goroutine this call started has been stopped.
+func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema.GroupVersionResource, requiredFields []string) *gvrInformer {
 	log := c.logger.WithValues("gvr", gvr.String())
 
 	allowed, ssarErr := c.preflight(parent, gvr)
 	if ssarErr != nil {
 		log.Info("ssar preflight failed", "error", ssarErr.Error())
 		controllermetrics.RBACDeniedTotal.WithLabelValues(c.clusterName, gvr.String()).Inc()
-		return &gvrInformer{denied: true, lastErr: ssarErr, cancel: noopCancel}
+		return &gvrInformer{denied: true, lastErr: ssarErr}
 	}
 	if !allowed {
 		log.Info("ssar preflight denied list/watch access")
 		controllermetrics.RBACDeniedTotal.WithLabelValues(c.clusterName, gvr.String()).Inc()
-		return &gvrInformer{denied: true, lastErr: errors.New("ssar: list or watch not allowed"), cancel: noopCancel}
+		return &gvrInformer{denied: true, lastErr: errors.New("ssar: list or watch not allowed")}
 	}
 
 	// Fast pre-check: if the GVR doesn't exist on the cluster at all,
@@ -339,34 +411,29 @@ func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema
 	if probeErr := c.probeList(parent, gvr); isNotFoundOrForbidden(probeErr) {
 		log.Info("probe list detected unavailable GVR; recording denial without waiting for sync")
 		controllermetrics.RBACDeniedTotal.WithLabelValues(c.clusterName, gvr.String()).Inc()
-		return &gvrInformer{denied: true, lastErr: probeErr, cancel: noopCancel}
+		return &gvrInformer{denied: true, lastErr: probeErr}
 	}
 
-	generic := c.factory.ForResource(gvr)
+	factory := dynamicinformer.NewDynamicSharedInformerFactory(c.dynamicClient, defaultResyncPeriod)
+	generic := factory.ForResource(gvr)
 	informer := generic.Informer()
 
-	// Track per-attempt context separately from the informer's lifecycle.
-	// The informer itself is started ONCE per (collector, GVR); subsequent
-	// reconciles re-use the existing informer. We can't actually stop a
-	// SharedIndexInformer and restart it later, so cancellation only
-	// gates this particular startInformer attempt's cache-sync wait.
-	runCtx, cancel := context.WithCancel(parent)
-
-	c.mu.Lock()
-	_, alreadyStarted := c.startedInformers[gvr]
-	if !alreadyStarted {
-		c.startedInformers[gvr] = struct{}{}
-	}
-	c.mu.Unlock()
-	if !alreadyStarted {
-		log.V(1).Info("starting informer goroutine")
-		go informer.Run(c.ctx.Done())
-	} else {
-		log.V(1).Info("reusing running informer")
+	runCtx, runCancel := context.WithCancel(c.ctx)
+	fields := &sharedRequiredFields{}
+	fields.Set(requiredFields)
+	if err := informer.SetTransform(trimTransform(fields)); err != nil {
+		// SetTransform only fails if Run was already called. We just
+		// built the informer; that shouldn't be possible here.
+		panic(fmt.Sprintf("collector: SetTransform on fresh informer: %v", err))
 	}
 
-	// Wait for the cache to sync, bounded by cacheSyncTimeout.
-	syncCtx, syncCancel := context.WithTimeout(runCtx, cacheSyncTimeout)
+	log.V(1).Info("starting informer goroutine")
+	go informer.Run(runCtx.Done())
+
+	// Wait for the cache to sync, bounded by cacheSyncTimeout. The informer
+	// goroutine runs on runCtx (derived from c.ctx); this timeout only
+	// gates this attempt, not the goroutine's lifetime.
+	syncCtx, syncCancel := context.WithTimeout(parent, cacheSyncTimeout)
 	defer syncCancel()
 	log.V(1).Info("waiting for cache sync")
 	synced := cache.WaitForCacheSync(syncCtx.Done(), informer.HasSynced)
@@ -388,31 +455,25 @@ func (c *ControlPlaneCollector) startInformer(parent context.Context, gvr schema
 		probeErr := c.probeList(parent, gvr)
 		denied := isNotFoundOrForbidden(probeErr)
 		log.Info("informer cache sync failed", "error", err.Error(), "denied", denied)
-		// Always tear down the informer goroutine — even when we record
-		// the entry — so it doesn't linger or double-run on the next
-		// reconcile.
-		cancel()
+		// Tear down the informer we just started — caller never sees it.
+		runCancel()
 		if denied {
 			controllermetrics.RBACDeniedTotal.WithLabelValues(c.clusterName, gvr.String()).Inc()
-			// Record the denied entry so the policy reconciler picks it
-			// up in missingPermissions. Subsequent reconciles will
-			// re-evaluate and start the informer if the GVR appears
-			// (e.g. CRD installed later).
 			lastErr := probeErr
 			if lastErr == nil {
 				lastErr = err
 			}
-			return &gvrInformer{denied: true, lastErr: lastErr, cancel: noopCancel}
+			return &gvrInformer{denied: true, lastErr: lastErr}
 		}
-		// Transient sync failure (e.g. apiserver flake) — drop the
-		// entry so the next reconcile re-attempts.
+		// Transient sync failure (e.g. apiserver flake).
 		return nil
 	}
 
 	log.V(1).Info("informer started")
 	return &gvrInformer{
 		informer: generic,
-		cancel:   cancel,
+		fields:   fields,
+		stop:     runCancel,
 		synced:   true,
 	}
 }
@@ -531,10 +592,6 @@ func toUnstructuredContent(obj runtime.Object) map[string]any {
 	}
 	return nil
 }
-
-// noopCancel is assigned to denied informers so that deletion code paths can
-// unconditionally call cancel() without a nil check.
-func noopCancel() {}
 
 // isNotFoundOrForbidden classifies an API error as "denied" for the purpose
 // of marking an informer as denied rather than retrying forever.
