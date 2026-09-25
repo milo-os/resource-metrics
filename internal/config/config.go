@@ -23,6 +23,9 @@ import (
 // configured.
 const redactedHeaderValue = "<redacted>"
 
+// DefaultMaxExportRequestBytes is the default OtelConfig.MaxExportRequestBytes.
+const DefaultMaxExportRequestBytes = 4 << 20
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:defaulter-gen=true
 
@@ -56,6 +59,12 @@ type OtelConfig struct {
 
 	// CollectionInterval is the PeriodicReader interval. Defaults to 30s.
 	CollectionInterval metav1.Duration `json:"collectionInterval"`
+
+	// MaxExportRequestBytes caps the encoded size of each OTLP export
+	// request. A collection cycle larger than this is split across several
+	// requests so no single message exceeds the collector's gRPC receive
+	// limit. Defaults to 4 MiB.
+	MaxExportRequestBytes int `json:"maxExportRequestBytes,omitempty"`
 
 	// DefaultMetricPrefix is the controller-wide default metric name
 	// prefix applied to every emitted metric family, unless overridden by
@@ -112,6 +121,9 @@ func SetDefaults_OtelConfig(obj *OtelConfig) {
 	if obj.CollectionInterval.Duration == 0 {
 		obj.CollectionInterval = metav1.Duration{Duration: 30 * time.Second}
 	}
+	if obj.MaxExportRequestBytes <= 0 {
+		obj.MaxExportRequestBytes = DefaultMaxExportRequestBytes
+	}
 }
 
 // DiscoveryRestConfig returns the REST config to use for project discovery.
@@ -157,11 +169,12 @@ func (c *ResourceMetricsOperator) MarshalLog() any {
 // Headers map values redacted. Keys are preserved.
 func (c OtelConfig) String() string {
 	return fmt.Sprintf(
-		"{Endpoint:%q Insecure:%t Headers:%s CollectionInterval:%s DefaultMetricPrefix:%q ResourceAttributes:%s}",
+		"{Endpoint:%q Insecure:%t Headers:%s CollectionInterval:%s MaxExportRequestBytes:%d DefaultMetricPrefix:%q ResourceAttributes:%s}",
 		c.Endpoint,
 		c.Insecure,
 		redactHeaders(c.Headers),
 		c.CollectionInterval.Duration,
+		c.MaxExportRequestBytes,
 		c.DefaultMetricPrefix,
 		formatStringMap(c.ResourceAttributes),
 	)

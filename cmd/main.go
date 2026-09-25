@@ -266,12 +266,13 @@ func buildOtelProviderOptions(cfg config.OtelConfig) otelpkg.ProviderOptions {
 		attrs = append(attrs, attribute.String(k, v))
 	}
 	return otelpkg.ProviderOptions{
-		Endpoint:           cfg.Endpoint,
-		Insecure:           cfg.Insecure,
-		Headers:            cfg.Headers,
-		CollectionInterval: cfg.CollectionInterval.Duration,
-		ServiceName:        "resource-metrics",
-		ResourceAttributes: attrs,
+		Endpoint:              cfg.Endpoint,
+		Insecure:              cfg.Insecure,
+		Headers:               cfg.Headers,
+		CollectionInterval:    cfg.CollectionInterval.Duration,
+		MaxExportRequestBytes: cfg.MaxExportRequestBytes,
+		ServiceName:           "resource-metrics",
+		ResourceAttributes:    attrs,
 	}
 }
 
