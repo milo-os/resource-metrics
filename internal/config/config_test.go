@@ -135,3 +135,26 @@ func TestResourceMetricsOperator_String_NilReceiver(t *testing.T) {
 		t.Errorf("(*ResourceMetricsOperator)(nil).String() = %q, want %q", got, "<nil>")
 	}
 }
+
+func TestSetDefaults_OtelConfig_MaxExportRequestBytes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "unset uses default", in: 0, want: DefaultMaxExportRequestBytes},
+		{name: "negative uses default", in: -1, want: DefaultMaxExportRequestBytes},
+		{name: "explicit value wins", in: 1 << 20, want: 1 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := OtelConfig{MaxExportRequestBytes: tc.in}
+			SetDefaults_OtelConfig(&cfg)
+			if cfg.MaxExportRequestBytes != tc.want {
+				t.Errorf("MaxExportRequestBytes = %d, want %d", cfg.MaxExportRequestBytes, tc.want)
+			}
+		})
+	}
+}

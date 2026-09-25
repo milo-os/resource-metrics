@@ -47,6 +47,11 @@ type ProviderOptions struct {
 	// defaultCollectionInterval.
 	CollectionInterval time.Duration
 
+	// MaxExportRequestBytes caps the encoded size of each OTLP export
+	// request. A collection cycle larger than this is sent as several
+	// requests. Zero means DefaultMaxExportRequestBytes.
+	MaxExportRequestBytes int
+
 	// ServiceName, ServiceVersion, and ServiceInstanceID are merged into
 	// the resource attribute set as service.* semconv attributes. Any
 	// that are empty are simply omitted.
@@ -120,7 +125,10 @@ func NewMeterProvider(ctx context.Context, opts ProviderOptions) (*sdkmetric.Met
 		interval = defaultCollectionInterval
 	}
 
-	reader := sdkmetric.NewPeriodicReader(exporter, sdkmetric.WithInterval(interval))
+	reader := sdkmetric.NewPeriodicReader(
+		newSplittingExporter(exporter, opts.MaxExportRequestBytes),
+		sdkmetric.WithInterval(interval),
+	)
 
 	return sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
