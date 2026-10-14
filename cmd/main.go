@@ -283,27 +283,27 @@ type leaseTiming struct {
 	RetryPeriod   time.Duration
 }
 
-// The lease timing outlasts a slow API server. client-go times out each lease
-// request at half the renew deadline, so with controller-runtime's defaults
-// (15 s, 10 s, 2 s) one write slower than 5 s, retried once, loses the lease.
-// Here a write may take 20 s. The cost is that a standby, or a restarted
-// replica, waits up to the lease duration after a leader that did not release
-// the lease.
+// The lease timing defaults to controller-runtime's own. client-go times out
+// each lease request at half the renew deadline, so with these values one
+// write slower than 5 s, retried once, loses the lease. A deployment whose API
+// server answers Lease writes slowly sets longer values through the flags; the
+// cost is that a standby waits up to the lease duration after a leader that
+// did not release the lease.
 const (
-	defaultLeaseDuration = 60 * time.Second
-	defaultRenewDeadline = 40 * time.Second
-	defaultRetryPeriod   = 5 * time.Second
+	defaultLeaseDuration = 15 * time.Second
+	defaultRenewDeadline = 10 * time.Second
+	defaultRetryPeriod   = 2 * time.Second
 )
 
 // bindLeaseFlags registers the lease timing flags on fs.
 func bindLeaseFlags(fs *flag.FlagSet) *leaseTiming {
 	lease := &leaseTiming{}
-	fs.DurationVar(&lease.LeaseDuration, "leader-election-lease-duration", defaultLeaseDuration,
+	fs.DurationVar(&lease.LeaseDuration, "leader-elect-lease-duration", defaultLeaseDuration,
 		"How long a standby waits before it takes over a lease that was not renewed.")
-	fs.DurationVar(&lease.RenewDeadline, "leader-election-renew-deadline", defaultRenewDeadline,
+	fs.DurationVar(&lease.RenewDeadline, "leader-elect-renew-deadline", defaultRenewDeadline,
 		"How long the leader keeps retrying a renewal before it gives the lease up. "+
 			"Each renewal request may take half of it.")
-	fs.DurationVar(&lease.RetryPeriod, "leader-election-retry-period", defaultRetryPeriod,
+	fs.DurationVar(&lease.RetryPeriod, "leader-elect-retry-period", defaultRetryPeriod,
 		"How long the leader waits between renewal attempts.")
 	return lease
 }

@@ -27,6 +27,12 @@ import (
 
 const testLeaseName = "resourcemetrics.miloapis.com"
 
+// slowServerTiming is the timing a deployment sets for an API server with a
+// slow tail of Lease writes: each lease request may then take 20 s.
+var slowServerTiming = []string{
+	"--leader-elect-lease-duration=60s", "--leader-elect-renew-deadline=40s", "--leader-elect-retry-period=5s",
+}
+
 func TestManagerOptions_LeaderElection(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	lease := bindLeaseFlags(fs)
@@ -38,13 +44,17 @@ func TestManagerOptions_LeaderElection(t *testing.T) {
 	require.NotNil(t, opts.LeaseDuration, "the lease timing is not passed to the manager")
 	require.NotNil(t, opts.RenewDeadline)
 	require.NotNil(t, opts.RetryPeriod)
-	assert.Equal(t, defaultLeaseDuration, *opts.LeaseDuration)
-	assert.Equal(t, defaultRenewDeadline, *opts.RenewDeadline)
-	assert.Equal(t, defaultRetryPeriod, *opts.RetryPeriod)
+	// Unset, the timing is controller-runtime's own, so a deployment that sets
+	// nothing keeps the lease it had.
+	assert.Equal(t, 15*time.Second, *opts.LeaseDuration)
+	assert.Equal(t, 10*time.Second, *opts.RenewDeadline)
+	assert.Equal(t, 2*time.Second, *opts.RetryPeriod)
 
-	require.NoError(t, fs.Parse([]string{"--leader-election-renew-deadline=30s"}))
-	assert.Equal(t, 30*time.Second, *managerOptions("0", ":8081", true, lease).RenewDeadline,
-		"the flag does not reach the manager")
+	require.NoError(t, fs.Parse(slowServerTiming))
+	opts = managerOptions("0", ":8081", true, lease)
+	assert.Equal(t, 60*time.Second, *opts.LeaseDuration, "the flag does not reach the manager")
+	assert.Equal(t, 40*time.Second, *opts.RenewDeadline, "the flag does not reach the manager")
+	assert.Equal(t, 5*time.Second, *opts.RetryPeriod, "the flag does not reach the manager")
 }
 
 // leaseServer serves one coordination.k8s.io/v1 Lease and answers each
@@ -106,7 +116,7 @@ func (s *leaseServer) write(w http.ResponseWriter, req *http.Request, code int) 
 	}
 	rv, _ := strconv.Atoi(lease.ResourceVersion)
 	lease.ResourceVersion = strconv.Itoa(rv + 1)
-	lease.TypeMeta.Kind, lease.TypeMeta.APIVersion = "Lease", "coordination.k8s.io/v1"
+	lease.Kind, lease.APIVersion = "Lease", "coordination.k8s.io/v1"
 	s.lease = &lease
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -167,33 +177,38 @@ func holdLease(t *testing.T, srv *leaseServer, opts leaderelection.LeaderElectio
 }
 
 // The Milo API server answers a slow tail of Lease writes. Each lease request
-// times out at half the renew deadline, so with controller-runtime's defaults
-// (15 s, 10 s, 2 s) a write slower than 5 s loses the lease; the manager's
-// timing holds it through writes up to 20 s.
+// times out at half the renew deadline, so with the default timing (15 s, 10 s,
+// 2 s) a write slower than 5 s loses the lease; the timing a deployment sets
+// through the flags holds it through writes up to 20 s.
 func TestLeaseTiming_HoldsThroughSlowLeaseWrites(t *testing.T) {
 	if testing.Short() {
 		t.Skip("waits for real lease renewals")
 	}
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	ours := managerOptions("0", ":8081", true, bindLeaseFlags(fs))
-	require.NotNil(t, ours.LeaseDuration, "the lease timing is not passed to the manager")
-	timings := map[string]leaderelection.LeaderElectionConfig{
-		"controller-runtime defaults": {
-			LeaseDuration: 15 * time.Second, RenewDeadline: 10 * time.Second, RetryPeriod: 2 * time.Second,
-		},
-		"the manager's timing": {
-			LeaseDuration: *ours.LeaseDuration, RenewDeadline: *ours.RenewDeadline, RetryPeriod: *ours.RetryPeriod,
-		},
+	timing := func(args []string) leaderelection.LeaderElectionConfig {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		lease := bindLeaseFlags(fs)
+		require.NoError(t, fs.Parse(args))
+		opts := managerOptions("0", ":8081", true, lease)
+		require.NotNil(t, opts.LeaseDuration, "the lease timing is not passed to the manager")
+		require.NotNil(t, opts.RenewDeadline, "the lease timing is not passed to the manager")
+		require.NotNil(t, opts.RetryPeriod, "the lease timing is not passed to the manager")
+		return leaderelection.LeaderElectionConfig{
+			LeaseDuration: *opts.LeaseDuration, RenewDeadline: *opts.RenewDeadline, RetryPeriod: *opts.RetryPeriod,
+		}
 	}
-	for name, timing := range timings {
+	timings := map[string]leaderelection.LeaderElectionConfig{
+		"the defaults":            timing(nil),
+		"the timing set by flags": timing(slowServerTiming),
+	}
+	for name, held := range map[string]bool{"the defaults": false, "the timing set by flags": true} {
 		for _, delay := range []time.Duration{6 * time.Second, 12 * time.Second} {
 			t.Run(strings.ReplaceAll(name, " ", "_")+"/write_"+delay.String(), func(t *testing.T) {
 				t.Parallel()
-				held := holdLease(t, &leaseServer{writeDelay: delay}, timing, 2)
-				if name == "the manager's timing" {
-					assert.True(t, held, "the lease was lost to %s writes", delay)
+				got := holdLease(t, &leaseServer{writeDelay: delay}, timings[name], 2)
+				if held {
+					assert.True(t, got, "the lease was lost to %s writes", delay)
 				} else {
-					assert.False(t, held, "the defaults held through %s writes, so this test cannot tell timings apart", delay)
+					assert.False(t, got, "the defaults held through %s writes, so this test cannot tell timings apart", delay)
 				}
 			})
 		}
