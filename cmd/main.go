@@ -15,6 +15,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 
 	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -70,6 +71,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&serverConfigFile, "server-config", "", "path to the server config file")
+	lease := bindLeaseFlags(flag.CommandLine)
 
 	opts := zap.Options{
 		Development: true,
@@ -167,16 +169,8 @@ func main() {
 	// flag. In milo mode the deployment sets KUBECONFIG=/etc/milo/kubeconfig
 	// so the local cluster (and therefore the ResourceMetricsPolicy watch and
 	// leader election) targets the Milo control plane.
-	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), provider, ctrl.Options{
-		Scheme: scheme,
-		Metrics: metricsserver.Options{
-			BindAddress: metricsAddr,
-		},
-		HealthProbeBindAddress:  probeAddr,
-		LeaderElection:          enableLeaderElection,
-		LeaderElectionID:        "resourcemetrics.miloapis.com",
-		LeaderElectionNamespace: "milo-system",
-	})
+	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), provider,
+		managerOptions(metricsAddr, probeAddr, enableLeaderElection, lease))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -215,46 +209,122 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := ctrl.SetupSignalHandler()
-	g, ctx := errgroup.WithContext(ctx)
-
+	workers := make([]func(context.Context) error, 0, len(runnables)+2)
 	for _, runnable := range runnables {
-		g.Go(func() error {
-			return ignoreCanceled(runnable.Start(ctx))
-		})
+		workers = append(workers, runnable.Start)
 	}
+	workers = append(workers,
+		func(ctx context.Context) error { return provider.Run(ctx, mgr) },
+		shutdownOnStop(otelRuntime, meterProvider),
+	)
 
-	setupLog.Info("starting cluster discovery provider")
-	g.Go(func() error {
-		return ignoreCanceled(provider.Run(ctx, mgr))
-	})
-
-	setupLog.Info("starting multicluster manager")
-	g.Go(func() error {
-		return ignoreCanceled(mgr.Start(ctx))
-	})
-
-	// Drain the OTel pipeline before the collectors/informers are torn
-	// down. We do this in its own errgroup goroutine so that we can wait
-	// for ctx.Done (the signal handler fires) and run a bounded shutdown
-	// sequence regardless of how the other goroutines exit.
-	g.Go(func() error {
-		<-ctx.Done()
-		setupLog.Info("shutting down otel runtime")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := otelRuntime.Shutdown(shutdownCtx); err != nil {
-			setupLog.Error(err, "otel runtime shutdown")
-		}
-		if err := meterProvider.Shutdown(shutdownCtx); err != nil {
-			setupLog.Error(err, "otel meter provider shutdown")
-		}
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
+	setupLog.Info("starting cluster discovery provider and multicluster manager")
+	if err := runUntilManagerStops(ctrl.SetupSignalHandler(), mgr.Start, workers...); err != nil {
 		setupLog.Error(err, "unable to start")
 		os.Exit(1)
+	}
+}
+
+// runUntilManagerStops runs the manager and the workers until the manager
+// returns, a worker fails, or ctx ends, and then stops all of them. A manager
+// that returns, for any reason, ends the process, so no replica stays Running
+// while it leads nothing.
+func runUntilManagerStops(
+	ctx context.Context,
+	startManager func(context.Context) error,
+	workers ...func(context.Context) error,
+) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	g, ctx := errgroup.WithContext(ctx)
+	for _, work := range workers {
+		g.Go(func() error { return ignoreCanceled(work(ctx)) })
+	}
+	g.Go(func() error {
+		defer cancel()
+		return ignoreCanceled(startManager(ctx))
+	})
+	return g.Wait()
+}
+
+// otelShutdownTimeout bounds how long the OTel pipeline may take to drain.
+const otelShutdownTimeout = 10 * time.Second
+
+type shutdowner interface {
+	Shutdown(context.Context) error
+}
+
+var (
+	_ shutdowner = (*otelpkg.Runtime)(nil)
+	_ shutdowner = (*sdkmetric.MeterProvider)(nil)
+)
+
+// shutdownOnStop returns a worker that waits for the run to stop, then shuts
+// each pipeline stage down in order, within otelShutdownTimeout.
+func shutdownOnStop(stages ...shutdowner) func(context.Context) error {
+	return func(ctx context.Context) error {
+		<-ctx.Done()
+		setupLog.Info("shutting down otel runtime")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
+		defer cancel()
+		for _, stage := range stages {
+			if err := stage.Shutdown(shutdownCtx); err != nil {
+				setupLog.Error(err, "otel shutdown", "stage", fmt.Sprintf("%T", stage))
+			}
+		}
+		return nil
+	}
+}
+
+// leaseTiming is how the manager holds its leader lease.
+type leaseTiming struct {
+	LeaseDuration time.Duration
+	RenewDeadline time.Duration
+	RetryPeriod   time.Duration
+}
+
+// The lease timing outlasts a slow API server. client-go times out each lease
+// request at half the renew deadline, so with controller-runtime's defaults
+// (15 s, 10 s, 2 s) one write slower than 5 s, retried once, loses the lease.
+// Here a write may take 20 s. The cost is that a standby, or a restarted
+// replica, waits up to the lease duration after a leader that did not release
+// the lease.
+const (
+	defaultLeaseDuration = 60 * time.Second
+	defaultRenewDeadline = 40 * time.Second
+	defaultRetryPeriod   = 5 * time.Second
+)
+
+// bindLeaseFlags registers the lease timing flags on fs.
+func bindLeaseFlags(fs *flag.FlagSet) *leaseTiming {
+	lease := &leaseTiming{}
+	fs.DurationVar(&lease.LeaseDuration, "leader-election-lease-duration", defaultLeaseDuration,
+		"How long a standby waits before it takes over a lease that was not renewed.")
+	fs.DurationVar(&lease.RenewDeadline, "leader-election-renew-deadline", defaultRenewDeadline,
+		"How long the leader keeps retrying a renewal before it gives the lease up. "+
+			"Each renewal request may take half of it.")
+	fs.DurationVar(&lease.RetryPeriod, "leader-election-retry-period", defaultRetryPeriod,
+		"How long the leader waits between renewal attempts.")
+	return lease
+}
+
+// managerOptions returns the manager's options. The leader lease is released
+// when the manager stops; runUntilManagerStops then ends the process, which
+// LeaderElectionReleaseOnCancel requires.
+func managerOptions(metricsAddr, probeAddr string, leaderElect bool, lease *leaseTiming) ctrl.Options {
+	return ctrl.Options{
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress: metricsAddr,
+		},
+		HealthProbeBindAddress:        probeAddr,
+		LeaderElection:                leaderElect,
+		LeaderElectionID:              "resourcemetrics.miloapis.com",
+		LeaderElectionNamespace:       "milo-system",
+		LeaderElectionReleaseOnCancel: true,
+		LeaseDuration:                 &lease.LeaseDuration,
+		RenewDeadline:                 &lease.RenewDeadline,
+		RetryPeriod:                   &lease.RetryPeriod,
 	}
 }
 
