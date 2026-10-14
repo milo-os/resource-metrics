@@ -93,8 +93,8 @@ func (c *generatorCompiler) compileFamily(fam v1alpha1.MetricFamilySpec) {
 	c.cg.Families = append(c.cg.Families, cf)
 }
 
-// compileMetric returns the compiled metric, or nil when its forEach did not
-// compile.
+// compileMetric returns the compiled metric, or nil when its forEach or its
+// value did not compile.
 func (c *generatorCompiler) compileMetric(family string, mi int, m v1alpha1.MetricSpec) *CompiledMetric {
 	cm := &CompiledMetric{}
 	// The env used to compile value and label expressions: the item env when
@@ -110,9 +110,14 @@ func (c *generatorCompiler) compileMetric(family string, mi int, m v1alpha1.Metr
 	}
 	if isSet(m.Value) {
 		failed := CompileError{Kind: CompileErrorKindValue, Index: mi}
-		if prog := c.compile(exprEnv, *m.Value, family, failed); prog != nil {
-			cm.ValueProgram = prog
+		prog := c.compile(exprEnv, *m.Value, family, failed)
+		if prog == nil {
+			// A metric without a ValueProgram publishes 1.0, which a value that
+			// failed to compile must not. Its labels still report their errors.
+			c.compileLabels(exprEnv, family, mi, m.Labels)
+			return nil
 		}
+		cm.ValueProgram = prog
 	}
 	cm.Labels = c.compileLabels(exprEnv, family, mi, m.Labels)
 	return cm

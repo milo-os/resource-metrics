@@ -285,3 +285,38 @@ func TestBuild_ValueErrorSkipsSeries(t *testing.T) {
 	require.Len(t, emitted, 1)
 	require.Equal(t, 7.0, emitted[0].Value)
 }
+
+func TestBuild_ValueCompileErrorEmitsNothing(t *testing.T) {
+	env, err := policy.NewEnv()
+	require.NoError(t, err)
+
+	bad := "object.status.size.noSuchFunction()"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "value-error"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name:     "g",
+		Resource: v1alpha1.ResourceReference{Group: "g", Version: "v", Resource: "r"},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{{
+				Value:  &bad,
+				Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}},
+			}},
+		}},
+	}}
+	cp, cerrs := policy.Compile(env, p)
+	require.Len(t, cerrs, 1)
+
+	objects := []map[string]any{{"metadata": map[string]any{"name": "x"}, "status": map[string]any{"size": int64(3)}}}
+	var emitted []metrics.Measurement
+	for _, gen := range cp.Generators {
+		if gen == nil {
+			continue
+		}
+		metrics.Build(cp, gen, objects, func(_ string, m metrics.Measurement) {
+			emitted = append(emitted, m)
+		}, nil, nil)
+	}
+	require.Empty(t, emitted, "a value that failed to compile publishes no series")
+}
