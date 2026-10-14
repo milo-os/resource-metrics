@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/common/overloads"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
@@ -203,6 +204,9 @@ func (e *Env) Compile(expr string) (*Program, error) {
 	if issues != nil && issues.Err() != nil {
 		return nil, fmt.Errorf("cel: check: %w", issues.Err())
 	}
+	if readsTimestampSecondsField(checked) {
+		return nil, ErrTimestampSecondsField
+	}
 	prog, err := e.env.Program(checked,
 		cel.CostLimit(evalCost),
 		// Check ctx.Done() every 100 comprehension iterations so a pathological
@@ -213,6 +217,35 @@ func (e *Env) Compile(expr string) (*Program, error) {
 		return nil, fmt.Errorf("cel: program: %w", err)
 	}
 	return &Program{Program: prog, RequiredFields: requiredFields(checked, e.rootObjectIdent)}, nil
+}
+
+// ErrTimestampSecondsField is returned by Compile for an expression that calls
+// getSeconds() on a timestamp.
+var ErrTimestampSecondsField = errors.New("cel: getSeconds() on a timestamp returns its seconds field, 0 to 59; " +
+	"use int(timestamp(...)) for seconds since the Unix epoch")
+
+// timestampSecondsField holds the overloads of getSeconds() on a timestamp.
+// They return the seconds field of the time, which a metric value never
+// means; getSeconds() on a duration returns its length and stays allowed.
+var timestampSecondsField = []string{overloads.TimestampToSeconds, overloads.TimestampToSecondsWithTz}
+
+// readsTimestampSecondsField reports whether the checked expression calls
+// getSeconds() on a value the checker typed as a timestamp.
+func readsTimestampSecondsField(a *cel.Ast) bool {
+	native := a.NativeRep()
+	found := false
+	ast.PreOrderVisit(native.Expr(), ast.NewExprVisitor(func(e ast.Expr) {
+		if e.Kind() != ast.CallKind {
+			return
+		}
+		ids := native.GetOverloadIDs(e.ID())
+		if len(ids) > 0 && !slices.ContainsFunc(ids, func(id string) bool {
+			return !slices.Contains(timestampSecondsField, id)
+		}) {
+			found = true
+		}
+	}))
+	return found
 }
 
 // requiredFields determines which root-object fields the CEL program needs
