@@ -279,6 +279,33 @@ func TestCompile_ForEach_InvalidCEL(t *testing.T) {
 	require.Equal(t, policy.CompileErrorKindForEach, errs[0].Kind)
 }
 
+// TestCompile_ForEach_ErrorDropsMetric verifies that a metric whose forEach
+// fails to compile is dropped while its sibling metric keeps compiling.
+func TestCompile_ForEach_ErrorDropsMetric(t *testing.T) {
+	env := mustEnv(t)
+	badForEach := "??? not valid"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "foreach-drop"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name:     "g",
+		Resource: v1alpha1.ResourceReference{Group: "g", Version: "v", Resource: "rs"},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{
+				{ForEach: &badForEach, Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}}},
+				{Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}}},
+			},
+		}},
+	}}
+
+	cp, errs := policy.Compile(env, p)
+	require.Len(t, errs, 1)
+	require.Equal(t, policy.CompileErrorKindForEach, errs[0].Kind)
+	require.Len(t, cp.Generators, 1)
+	require.Len(t, cp.Generators[0].Families[0].Metrics, 1, "the metric whose forEach failed is dropped")
+}
+
 // TestCompile_ForEach_ErrorIncludesMetricIndex verifies that a forEach compile
 // error formats with the metric index so operators can locate the bad expression.
 func TestCompile_ForEach_ErrorIncludesMetricIndex(t *testing.T) {
