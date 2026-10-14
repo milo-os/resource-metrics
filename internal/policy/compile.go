@@ -29,125 +29,138 @@ func Compile(env *Env, policy *v1alpha1.ResourceMetricsPolicy) (*CompiledPolicy,
 	itemEnv, itemEnvErr := env.NewItemEnv()
 
 	for _, gen := range policy.Spec.Generators {
-		cg := &CompiledGenerator{
-			Name:           gen.Name,
-			Resource:       gen.Resource,
-			Families:       make([]*CompiledFamily, 0, len(gen.Families)),
-			RequiredFields: make([]string, 0),
+		gc := &generatorCompiler{
+			policy:     name,
+			generator:  gen.Name,
+			env:        env,
+			itemEnv:    itemEnv,
+			itemEnvErr: itemEnvErr,
+			cg: &CompiledGenerator{
+				Name:           gen.Name,
+				Resource:       gen.Resource,
+				Families:       make([]*CompiledFamily, 0, len(gen.Families)),
+				RequiredFields: make([]string, 0),
+			},
 		}
-		// genExprTotal counts every compilable expression in the generator
-		// (each metric's value + each label). genExprSuccesses counts those
-		// that compiled. If the generator had expressions and every one of
-		// them failed, we store a nil slot in cp.Generators instead of a
-		// husk — matching the documented contract on CompiledGenerator and
-		// sparing downstream callers from walking an empty tree that will
-		// never emit anything. A generator with no expressions at all
-		// (e.g. no families defined) stays non-nil because it still
-		// contributes a GVR to the desired informer set.
-		genExprTotal := 0
-		genExprSuccesses := 0
 		for _, fam := range gen.Families {
-			cf := &CompiledFamily{
-				Name:    fam.Name,
-				Help:    fam.Help,
-				Metrics: make([]*CompiledMetric, 0, len(fam.Metrics)),
-			}
-			for mi, m := range fam.Metrics {
-				cm := &CompiledMetric{
-					Labels: make([]*CompiledLabel, 0, len(m.Labels)),
-				}
-
-				hasForEach := m.ForEach != nil && *m.ForEach != ""
-
-				// The env used to compile value and label expressions: the
-				// item env when forEach is set, the base env otherwise.
-				exprEnv := env
-				if hasForEach {
-					genExprTotal++
-					if itemEnvErr != nil {
-						errs = append(errs, CompileError{
-							Policy:    name,
-							Generator: gen.Name,
-							Family:    fam.Name,
-							Kind:      CompileErrorKindForEach,
-							Index:     mi,
-							Err:       itemEnvErr,
-						})
-						continue
-					}
-					exprEnv = itemEnv
-					prog, err := env.Compile(*m.ForEach)
-					if err != nil {
-						errs = append(errs, CompileError{
-							Policy:    name,
-							Generator: gen.Name,
-							Family:    fam.Name,
-							Kind:      CompileErrorKindForEach,
-							Index:     mi,
-							Err:       err,
-						})
-						continue
-					}
-					cm.ForEachProgram = prog
-					cg.RequiredFields = append(cg.RequiredFields, prog.RequiredFields...)
-					genExprSuccesses++
-				}
-
-				hasValueExpr := m.Value != nil && *m.Value != ""
-				if hasValueExpr {
-					genExprTotal++
-					prog, err := exprEnv.Compile(*m.Value)
-					if err != nil {
-						errs = append(errs, CompileError{
-							Policy:    name,
-							Generator: gen.Name,
-							Family:    fam.Name,
-							Kind:      CompileErrorKindValue,
-							Index:     mi,
-							Err:       err,
-						})
-					} else {
-						cm.ValueProgram = prog
-						cg.RequiredFields = append(cg.RequiredFields, prog.RequiredFields...)
-						genExprSuccesses++
-					}
-				}
-				for li, lbl := range m.Labels {
-					genExprTotal++
-					prog, err := exprEnv.Compile(lbl.Value)
-					if err != nil {
-						errs = append(errs, CompileError{
-							Policy:      name,
-							Generator:   gen.Name,
-							Family:      fam.Name,
-							Kind:        CompileErrorKindLabel,
-							Index:       li,
-							MetricIndex: mi,
-							Name:        lbl.Name,
-							Err:         err,
-						})
-						continue
-					}
-					cm.Labels = append(cm.Labels, &CompiledLabel{
-						Name:         lbl.Name,
-						ValueProgram: prog,
-					})
-					cg.RequiredFields = append(cg.RequiredFields, prog.RequiredFields...)
-					genExprSuccesses++
-				}
-				cf.Metrics = append(cf.Metrics, cm)
-			}
-			cg.Families = append(cg.Families, cf)
+			gc.compileFamily(fam)
 		}
-		if genExprTotal > 0 && genExprSuccesses == 0 {
-			// Every expression in the generator failed to compile. Preserve
-			// positional alignment with spec.Generators so callers that
-			// correlate by index still line up.
+		errs = append(errs, gc.errs...)
+		// If the generator had expressions and every one of them failed, we
+		// store a nil slot in cp.Generators instead of a husk — matching the
+		// documented contract on CompiledGenerator and sparing downstream
+		// callers from walking an empty tree that will never emit anything. A
+		// generator with no expressions at all (e.g. no families defined)
+		// stays non-nil because it still contributes a GVR to the desired
+		// informer set. The nil slot preserves positional alignment with
+		// spec.Generators so callers that correlate by index still line up.
+		if gc.total > 0 && gc.successes == 0 {
 			cp.Generators = append(cp.Generators, nil)
 			continue
 		}
-		cp.Generators = append(cp.Generators, cg)
+		cp.Generators = append(cp.Generators, gc.cg)
 	}
 
 	return cp, errs
 }
+
+// generatorCompiler compiles the families of one generator. total counts
+// every compilable expression in the generator (each metric's forEach and
+// value, and each label); successes counts those that compiled.
+type generatorCompiler struct {
+	policy     types.NamespacedName
+	generator  string
+	env        *Env
+	itemEnv    *Env
+	itemEnvErr error
+	cg         *CompiledGenerator
+	total      int
+	successes  int
+	errs       []CompileError
+}
+
+func (c *generatorCompiler) compileFamily(fam v1alpha1.MetricFamilySpec) {
+	cf := &CompiledFamily{
+		Name:    fam.Name,
+		Help:    fam.Help,
+		Metrics: make([]*CompiledMetric, 0, len(fam.Metrics)),
+	}
+	for mi, m := range fam.Metrics {
+		if cm := c.compileMetric(fam.Name, mi, m); cm != nil {
+			cf.Metrics = append(cf.Metrics, cm)
+		}
+	}
+	c.cg.Families = append(c.cg.Families, cf)
+}
+
+// compileMetric returns the compiled metric, or nil when its forEach or its
+// value did not compile.
+func (c *generatorCompiler) compileMetric(family string, mi int, m v1alpha1.MetricSpec) *CompiledMetric {
+	cm := &CompiledMetric{}
+	// The env used to compile value and label expressions: the item env when
+	// forEach is set, the base env otherwise.
+	exprEnv := c.env
+	if isSet(m.ForEach) {
+		prog := c.compileForEach(family, mi, *m.ForEach)
+		if prog == nil {
+			return nil
+		}
+		cm.ForEachProgram = prog
+		exprEnv = c.itemEnv
+	}
+	if isSet(m.Value) {
+		failed := CompileError{Kind: CompileErrorKindValue, Index: mi}
+		prog := c.compile(exprEnv, *m.Value, family, failed)
+		if prog == nil {
+			// A metric without a ValueProgram publishes 1.0, which a value that
+			// failed to compile must not. Its labels still report their errors.
+			c.compileLabels(exprEnv, family, mi, m.Labels)
+			return nil
+		}
+		cm.ValueProgram = prog
+	}
+	cm.Labels = c.compileLabels(exprEnv, family, mi, m.Labels)
+	return cm
+}
+
+func (c *generatorCompiler) compileForEach(family string, mi int, expr string) *Program {
+	failed := CompileError{Kind: CompileErrorKindForEach, Index: mi}
+	if c.itemEnvErr != nil {
+		c.total++
+		c.fail(family, failed, c.itemEnvErr)
+		return nil
+	}
+	return c.compile(c.env, expr, family, failed)
+}
+
+func (c *generatorCompiler) compileLabels(env *Env, family string, mi int, labels []v1alpha1.LabelSpec) []*CompiledLabel {
+	compiled := make([]*CompiledLabel, 0, len(labels))
+	for li, lbl := range labels {
+		failed := CompileError{Kind: CompileErrorKindLabel, Index: li, MetricIndex: mi, Name: lbl.Name}
+		if prog := c.compile(env, lbl.Value, family, failed); prog != nil {
+			compiled = append(compiled, &CompiledLabel{Name: lbl.Name, ValueProgram: prog})
+		}
+	}
+	return compiled
+}
+
+// compile compiles expr in env and counts it. On failure it records failed,
+// located in family, with the compile error, and returns nil.
+func (c *generatorCompiler) compile(env *Env, expr, family string, failed CompileError) *Program {
+	c.total++
+	prog, err := env.Compile(expr)
+	if err != nil {
+		c.fail(family, failed, err)
+		return nil
+	}
+	c.cg.RequiredFields = append(c.cg.RequiredFields, prog.RequiredFields...)
+	c.successes++
+	return prog
+}
+
+func (c *generatorCompiler) fail(family string, failed CompileError, err error) {
+	failed.Policy, failed.Generator, failed.Family, failed.Err = c.policy, c.generator, family, err
+	c.errs = append(c.errs, failed)
+}
+
+func isSet(s *string) bool { return s != nil && *s != "" }

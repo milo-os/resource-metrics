@@ -279,6 +279,33 @@ func TestCompile_ForEach_InvalidCEL(t *testing.T) {
 	require.Equal(t, policy.CompileErrorKindForEach, errs[0].Kind)
 }
 
+// TestCompile_ForEach_ErrorDropsMetric verifies that a metric whose forEach
+// fails to compile is dropped while its sibling metric keeps compiling.
+func TestCompile_ForEach_ErrorDropsMetric(t *testing.T) {
+	env := mustEnv(t)
+	badForEach := "??? not valid"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "foreach-drop"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name:     "g",
+		Resource: v1alpha1.ResourceReference{Group: "g", Version: "v", Resource: "rs"},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "f",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{
+				{ForEach: &badForEach, Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}}},
+				{Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}}},
+			},
+		}},
+	}}
+
+	cp, errs := policy.Compile(env, p)
+	require.Len(t, errs, 1)
+	require.Equal(t, policy.CompileErrorKindForEach, errs[0].Kind)
+	require.Len(t, cp.Generators, 1)
+	require.Len(t, cp.Generators[0].Families[0].Metrics, 1, "the metric whose forEach failed is dropped")
+}
+
 // TestCompile_ForEach_ErrorIncludesMetricIndex verifies that a forEach compile
 // error formats with the metric index so operators can locate the bad expression.
 func TestCompile_ForEach_ErrorIncludesMetricIndex(t *testing.T) {
@@ -429,4 +456,36 @@ func TestRegistry_UpsertSnapshotDelete(t *testing.T) {
 
 	r.Delete(cp.Name)
 	require.Empty(t, r.Snapshot())
+}
+
+// TestCompile_ValueErrorDropsMetric exercises the contract that a metric whose
+// value expression fails to compile is dropped, as a metric whose forEach
+// fails is, while its sibling metric in the same family keeps compiling.
+func TestCompile_ValueErrorDropsMetric(t *testing.T) {
+	env := mustEnv(t)
+	bad, good := "object.status.size.noSuchFunction()", "object.status.size"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "value-error"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name:     "gen",
+		Resource: v1alpha1.ResourceReference{Group: "g", Version: "v", Resource: "rs"},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name: "fam",
+			Type: "gauge",
+			Metrics: []v1alpha1.MetricSpec{
+				{Value: &bad, Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}}},
+				{Value: &good, Labels: []v1alpha1.LabelSpec{{Name: "name", Value: "object.metadata.name"}}},
+			},
+		}},
+	}}
+
+	cp, errs := policy.Compile(env, p)
+	require.Len(t, errs, 1)
+	require.Equal(t, policy.CompileErrorKindValue, errs[0].Kind)
+	require.Equal(t, 0, errs[0].Index)
+
+	require.Len(t, cp.Generators, 1)
+	metrics := cp.Generators[0].Families[0].Metrics
+	require.Len(t, metrics, 1, "the metric whose value failed is dropped")
+	require.NotNil(t, metrics[0].ValueProgram)
 }
