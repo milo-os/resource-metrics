@@ -372,3 +372,26 @@ func TestEvalLabelWithItem_ResolvesItemField(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Ready", got)
 }
+
+func TestCompile_RefusesSecondsFieldOfTimestamp(t *testing.T) {
+	env := mustEnv(t)
+	for _, expr := range []string{
+		"double(timestamp(object.metadata.creationTimestamp).getSeconds())",
+		"double(timestamp(object.metadata.creationTimestamp).getSeconds('UTC'))",
+	} {
+		_, err := env.Compile(expr)
+		require.ErrorIs(t, err, policy.ErrTimestampSecondsField, expr)
+		require.Contains(t, err.Error(), "int(timestamp(", expr)
+	}
+}
+
+func TestCompile_AllowsUnixSecondsAndDurationSeconds(t *testing.T) {
+	env := mustEnv(t)
+	for _, expr := range []string{
+		"double(int(timestamp(object.metadata.creationTimestamp)))",
+		"double(duration('90s').getSeconds())",
+	} {
+		_, err := env.Compile(expr)
+		require.NoError(t, err, expr)
+	}
+}

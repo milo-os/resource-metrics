@@ -4,6 +4,7 @@ package metrics_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -319,4 +320,36 @@ func TestBuild_ValueCompileErrorEmitsNothing(t *testing.T) {
 		}, nil, nil)
 	}
 	require.Empty(t, emitted, "a value that failed to compile publishes no series")
+}
+
+func TestBuild_TimestampValueIsUnixSeconds(t *testing.T) {
+	env, err := policy.NewEnv()
+	require.NoError(t, err)
+
+	valExpr := "double(int(timestamp(object.metadata.creationTimestamp)))"
+	p := &v1alpha1.ResourceMetricsPolicy{}
+	p.Name = "with-timestamp"
+	p.Spec.Generators = []v1alpha1.GeneratorSpec{{
+		Name:     "g",
+		Resource: v1alpha1.ResourceReference{Group: "g", Version: "v", Resource: "r"},
+		Families: []v1alpha1.MetricFamilySpec{{
+			Name:    "created",
+			Type:    "gauge",
+			Metrics: []v1alpha1.MetricSpec{{Value: &valExpr}},
+		}},
+	}}
+	cp, cerrs := policy.Compile(env, p)
+	require.Empty(t, cerrs)
+
+	created := time.Date(2026, time.July, 13, 16, 53, 8, 0, time.UTC)
+	objects := []map[string]any{
+		{"metadata": map[string]any{"name": "x", "creationTimestamp": created.Format(time.RFC3339)}},
+	}
+	var emitted []metrics.Measurement
+	errs := metrics.Build(cp, cp.Generators[0], objects, func(_ string, m metrics.Measurement) {
+		emitted = append(emitted, m)
+	}, nil, nil)
+	require.Empty(t, errs)
+	require.Len(t, emitted, 1)
+	require.Equal(t, float64(created.Unix()), emitted[0].Value)
 }
