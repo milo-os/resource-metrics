@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mccontroller "sigs.k8s.io/multicluster-runtime/pkg/controller"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
@@ -68,14 +70,8 @@ func (r *ResourceMetricsPolicyReconciler) Reconcile(ctx context.Context, req mcr
 	logger := log.FromContext(ctx).WithValues("policy", req.NamespacedName.String(), "cluster", req.ClusterName)
 	logger.V(1).Info("reconcile invoked")
 
-	// We only own the policy CRD on the local cluster. Provider-cluster
-	// reconcile requests would race with the local cache (the policy
-	// often doesn't yet exist there from this client's view), surface as
-	// "not found", and incorrectly trigger the deletion path below —
-	// evicting a freshly-created policy from the registry. We can't
-	// disable provider-cluster engagement in the builder due to a bug in
-	// mcbuilder v0.21.0-alpha.8 (EngageOptions.ApplyToFor replaces
-	// instead of merging — see SetupWithManager comment), so guard here.
+	// Policies live only on the local cluster. A request for any other
+	// cluster would read "not found" and evict a live policy below.
 	if req.ClusterName != "" {
 		logger.Info("ignoring reconcile for non-local cluster")
 		return ctrl.Result{}, nil
@@ -380,25 +376,22 @@ func aggregateMissingPermissions(
 }
 
 // SetupWithManager registers the reconciler with the multicluster manager.
-// The ResourceMetricsPolicy CRD is cluster-scoped and lives on the management
-// cluster only: we engage with the local cluster and explicitly opt out of
-// provider clusters so the reconciler never fires for project CPs.
+// Policies live only on the local cluster, so the controller watches only
+// there and never opens a watch on a provider cluster.
 //
-// NOTE: passing both WithEngageWithLocalCluster(true) AND
-// WithEngageWithProviderClusters(false) as separate ForOptions is broken in
-// multicluster-runtime v0.21.0-alpha.8 — each EngageOptions.ApplyToFor does
-// opts.EngageOptions = w, so the second call wipes out the first. We pass
-// only WithEngageWithLocalCluster(true); engageWithProviderClusters falls back
-// to its default (true when a provider is set), so the controller will also
-// open watches on each engaged project CP. Those CPs don't serve the CRD,
-// so the watches surface "no matches for kind" errors but don't enqueue
-// reconciles. Track upstream: the right fix is for mcbuilder to merge
-// EngageOptions instead of replace.
+// Watches is used instead of For because, in multicluster-runtime
+// v0.21.0-alpha.8, each For engage option replaces the previous one, so For
+// cannot both engage the local cluster and skip provider clusters.
 func (r *ResourceMetricsPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	return mcbuilder.ControllerManagedBy(mgr).
-		For(&resourcemetricsv1alpha1.ResourceMetricsPolicy{},
-			mcbuilder.WithEngageWithLocalCluster(true),
-		).
 		Named("resourcemetricspolicy").
+		WithOptions(mccontroller.Options{
+			SkipNameValidation: mgr.GetControllerOptions().SkipNameValidation,
+		}).
+		Watches(&resourcemetricsv1alpha1.ResourceMetricsPolicy{},
+			mchandler.EnqueueRequestForObject,
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
 		Complete(r)
 }
