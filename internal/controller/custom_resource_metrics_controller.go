@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mccontroller "sigs.k8s.io/multicluster-runtime/pkg/controller"
 	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -384,6 +385,9 @@ func aggregateMissingPermissions(
 func (r *ResourceMetricsPolicyReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	return mcbuilder.ControllerManagedBy(mgr).
 		Named("resourcemetricspolicy").
+		WithOptions(mccontroller.Options{
+			SkipNameValidation: mgr.GetControllerOptions().SkipNameValidation,
+		}).
 		Watches(&resourcemetricsv1alpha1.ResourceMetricsPolicy{},
 			mchandler.EnqueueRequestForObject,
 			mcbuilder.WithEngageWithLocalCluster(true),

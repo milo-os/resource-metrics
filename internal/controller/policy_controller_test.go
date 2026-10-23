@@ -11,8 +11,10 @@ import (
 	. "github.com/onsi/gomega"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -45,6 +47,7 @@ var _ = Describe("ResourceMetricsPolicy controller with a cluster provider", fun
 			Scheme:                 k8sClient.Scheme(),
 			Metrics:                metricsserver.Options{BindAddress: "0"},
 			HealthProbeBindAddress: "0",
+			Controller:             ctrlconfig.Controller{SkipNameValidation: ptr.To(true)},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&ResourceMetricsPolicyReconciler{
