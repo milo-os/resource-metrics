@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	resourcemetricsv1alpha1 "go.datum.net/resource-metrics/api/v1alpha1"
 	"go.datum.net/resource-metrics/internal/collector"
@@ -27,7 +28,9 @@ import (
 
 type emptyProvider struct{}
 
-func (emptyProvider) Get(context.Context, string) (cluster.Cluster, error) { return nil, nil }
+func (emptyProvider) Get(context.Context, multicluster.ClusterName) (cluster.Cluster, error) {
+	return nil, nil
+}
 
 func (emptyProvider) IndexField(context.Context, client.Object, string, client.IndexerFunc) error {
 	return nil
