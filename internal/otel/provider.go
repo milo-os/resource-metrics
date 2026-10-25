@@ -133,5 +133,6 @@ func NewMeterProvider(ctx context.Context, opts ProviderOptions) (*sdkmetric.Met
 	return sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
+		sdkmetric.WithCardinalityLimit(0),
 	), nil
 }
