@@ -28,7 +28,7 @@ vars:
   # v0.2.12 fails to compile under Go 1.25 (testing.testDeps interface
   # gained a ModulePath method). v0.2.14 is the first release that compiles
   # cleanly. Bump this when a newer chainsaw is desired.
-  CHAINSAW_VERSION: 'v0.2.14'
+  CHAINSAW_VERSION: 'v0.2.15'
 
 includes:
   # Remote taskfile from datum-cloud/test-infra. Requires
