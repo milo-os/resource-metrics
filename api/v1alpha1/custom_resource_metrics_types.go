@@ -4,6 +4,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // ResourceMetricsPolicySpec defines the desired state of ResourceMetricsPolicy.
@@ -187,5 +188,9 @@ type ResourceMetricsPolicyList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&ResourceMetricsPolicy{}, &ResourceMetricsPolicyList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &ResourceMetricsPolicy{}, &ResourceMetricsPolicyList{})
+		metav1.AddToGroupVersion(s, GroupVersion)
+		return nil
+	})
 }

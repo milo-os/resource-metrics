@@ -160,16 +160,16 @@ func main() {
 
 	// Wrap the provider so that every cluster the underlying provider engages
 	// via mcmanager.Engage also gets forwarded into our ClusterManager. The
-	// wrapper handles both the single-cluster "engage on Run" case and the
-	// multi-cluster provider case by intercepting the Manager passed to
-	// provider.Run.
+	// wrapper handles both the single-cluster "engage on Start" case and the
+	// multi-cluster provider case by intercepting the Aware passed to
+	// provider.Start.
 	provider = wrapProviderWithCollector(provider, clusterManager)
 
 	// ctrl.GetConfigOrDie respects the KUBECONFIG env var and --kubeconfig
 	// flag. In milo mode the deployment sets KUBECONFIG=/etc/milo/kubeconfig
 	// so the local cluster (and therefore the ResourceMetricsPolicy watch and
 	// leader election) targets the Milo control plane.
-	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), provider,
+	mgr, err := mcmanager.New(ctrl.GetConfigOrDie(), managedProvider{provider},
 		managerOptions(metricsAddr, probeAddr, enableLeaderElection, lease))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -214,7 +214,7 @@ func main() {
 		workers = append(workers, runnable.Start)
 	}
 	workers = append(workers,
-		func(ctx context.Context) error { return provider.Run(ctx, mgr) },
+		func(ctx context.Context) error { return provider.Start(ctx, mgr) },
 		shutdownOnStop(otelRuntime, meterProvider),
 	)
 
@@ -348,29 +348,15 @@ func buildOtelProviderOptions(cfg config.OtelConfig) otelpkg.ProviderOptions {
 
 type runnableProvider interface {
 	multicluster.Provider
-	Run(context.Context, mcmanager.Manager) error
+	multicluster.ProviderRunnable
 }
 
-// wrappedSingleClusterProvider engages the single cluster before delegating
-// to the underlying provider's Run.
-//
-// Needed until we contribute the patch in the following PR again (need to sign CLA):
-//
-//	See: https://github.com/kubernetes-sigs/multicluster-runtime/pull/18
-type wrappedSingleClusterProvider struct {
-	runnableProvider
-	cluster cluster.Cluster
-}
-
-func (p *wrappedSingleClusterProvider) Run(ctx context.Context, mgr mcmanager.Manager) error {
-	if err := mgr.Engage(ctx, "single", p.cluster); err != nil {
-		return err
-	}
-	return p.runnableProvider.Run(ctx, mgr)
+type managedProvider struct {
+	multicluster.Provider
 }
 
 // rootClusterEngager engages the root/management cluster before delegating
-// to the underlying provider's Run. Used in Milo mode when
+// to the underlying provider's Start. Used in Milo mode when
 // CollectRootControlPlane is enabled to also collect metrics from the
 // cluster where project discovery runs.
 type rootClusterEngager struct {
@@ -378,17 +364,17 @@ type rootClusterEngager struct {
 	rootCluster cluster.Cluster
 }
 
-func (r *rootClusterEngager) Run(ctx context.Context, mgr mcmanager.Manager) error {
-	if err := mgr.Engage(ctx, "root", r.rootCluster); err != nil {
+func (r *rootClusterEngager) Start(ctx context.Context, aware multicluster.Aware) error {
+	if err := aware.Engage(ctx, "root", r.rootCluster); err != nil {
 		return err
 	}
-	return r.runnableProvider.Run(ctx, mgr)
+	return r.runnableProvider.Start(ctx, aware)
 }
 
 // Get overrides the embedded provider so that the "root" cluster name resolves
 // to the root control plane instead of returning ErrClusterNotFound from the
 // underlying Milo provider, which is unaware of the pre-engaged root cluster.
-func (r *rootClusterEngager) Get(ctx context.Context, clusterName string) (cluster.Cluster, error) {
+func (r *rootClusterEngager) Get(ctx context.Context, clusterName multicluster.ClusterName) (cluster.Cluster, error) {
 	if clusterName == "root" {
 		return r.rootCluster, nil
 	}
@@ -399,31 +385,31 @@ func (r *rootClusterEngager) Get(ctx context.Context, clusterName string) (clust
 // to both the underlying manager and a ClusterManager. This is how we hook
 // per-cluster collector creation without modifying upstream providers.
 type engageInterceptor struct {
-	mcmanager.Manager
+	multicluster.Aware
 	clusterManager *collector.ClusterManager
 }
 
 // Engage is called by the provider when a control plane becomes ready. We
 // engage the ClusterManager first; if that fails we do not engage the
 // underlying manager so the provider sees the failure atomically.
-func (i *engageInterceptor) Engage(ctx context.Context, name string, cl cluster.Cluster) error {
-	if err := i.clusterManager.Engage(ctx, name, cl); err != nil {
+func (i *engageInterceptor) Engage(ctx context.Context, name multicluster.ClusterName, cl cluster.Cluster) error {
+	if err := i.clusterManager.Engage(ctx, string(name), cl); err != nil {
 		return err
 	}
-	return i.Manager.Engage(ctx, name, cl)
+	return i.Aware.Engage(ctx, name, cl)
 }
 
-// collectorProviderWrapper intercepts the mcmanager.Manager passed to
-// provider.Run so that every Engage routed through it is observed by the
+// collectorProviderWrapper intercepts the Aware passed to
+// provider.Start so that every Engage routed through it is observed by the
 // ClusterManager.
 type collectorProviderWrapper struct {
 	runnableProvider
 	clusterManager *collector.ClusterManager
 }
 
-func (w *collectorProviderWrapper) Run(ctx context.Context, mgr mcmanager.Manager) error {
-	wrapped := &engageInterceptor{Manager: mgr, clusterManager: w.clusterManager}
-	return w.runnableProvider.Run(ctx, wrapped)
+func (w *collectorProviderWrapper) Start(ctx context.Context, aware multicluster.Aware) error {
+	wrapped := &engageInterceptor{Aware: aware, clusterManager: w.clusterManager}
+	return w.runnableProvider.Start(ctx, wrapped)
 }
 
 func wrapProviderWithCollector(p runnableProvider, cm *collector.ClusterManager) runnableProvider {
@@ -447,10 +433,7 @@ func initializeClusterDiscovery(
 			return nil, nil, fmt.Errorf("failed to construct deployment cluster: %w", err)
 		}
 		runnables = append(runnables, deploymentCluster)
-		provider = &wrappedSingleClusterProvider{
-			runnableProvider: mcsingle.New("single", deploymentCluster),
-			cluster:          deploymentCluster,
-		}
+		provider = mcsingle.New("single", deploymentCluster)
 
 	case milomulticluster.ProviderMilo:
 		discoveryRestConfig, err := serverConfig.Discovery.DiscoveryRestConfig()

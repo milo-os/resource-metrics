@@ -20,9 +20,11 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/record"
 	crleaderelection "sigs.k8s.io/controller-runtime/pkg/leaderelection"
+	crrecorder "sigs.k8s.io/controller-runtime/pkg/recorder"
 )
 
 const testLeaseName = "resourcemetrics.miloapis.com"
@@ -132,6 +134,8 @@ func (s *leaseServer) renewed() int {
 type discardEvents struct{}
 
 func (discardEvents) GetEventRecorderFor(string) record.EventRecorder { return &record.FakeRecorder{} }
+
+func (discardEvents) GetEventRecorder(string) crrecorder.EventRecorder { return &events.FakeRecorder{} }
 
 // holdLease leads against srv with the given timing, through the lock the
 // manager builds, until it has renewed `want` times or lost the lease.
