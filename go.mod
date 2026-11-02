@@ -2,6 +2,8 @@ module go.datum.net/resource-metrics
 
 go 1.26.0
 
+toolchain go1.27.3
+
 godebug default=go1.23
 
 require (
