@@ -18,6 +18,10 @@ jobs:
     with:
       image-name: resource-metrics
       registry-organization: milo-os
+      # Publish a multi-arch image so the controller runs on arm64 nodes
+      # (e.g. Apple-silicon kind clusters used by the dns-operator e2e), not
+      # just amd64. The shared workflow builds with buildx per this list.
+      platforms: linux/amd64,linux/arm64
     secrets: inherit
 
   publish-kustomize-bundles:
